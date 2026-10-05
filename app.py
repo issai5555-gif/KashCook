@@ -1,3 +1,4 @@
+Python
 import streamlit as st
 from google import genai
 
@@ -29,7 +30,7 @@ if api_key:
             horizontal=True
         )
         
-        st.subheader("⏱️ 2. Duración del Plan")
+        st.subheader("⏱️️ 2. Duración del Plan")
         dias = st.slider("Días a planificar:", 1, 7, 3)
 
     with col2:
@@ -58,8 +59,42 @@ if api_key:
         restringidos = st.text_input("Alimentos prohibidos o alergias:", placeholder="Ej. Cebolla, mariscos, lácteos")
 
     tiempos = []
-    if c_des: tiempos.append("Desayuno")
-    if c_alm: tiempos.append("Almuerzo")
-    if c_cen: tiempos.append("Cena")
+    if c_des:
+        tiempos.append("Desayuno")
+    if c_alm:
+        tiempos.append("Almuerzo")
+    if c_cen:
+        tiempos.append("Cena")
 
-    st.markdown("
+    if st.button("🚀 Generar Plan Inteligente con KashCook"):
+        if not tiempos:
+            st.warning("⚠ Por favor selecciona al menos un tiempo de comida.")
+        else:
+            with st.spinner("🤖 KashCook analizando costos, inventarios y diseñando tu menú..."):
+                prompt = (
+                    f"Actúa como un Chef experto y un sistema de inteligencia artificial avanzado para la app KashCook. "
+                    f"Genera un plan de menús detallado y vanguardista para {dias} días. "
+                    f"- Tienda de referencia: {tienda} (Chihuahua, México) "
+                    f"- Tipo de cocina: {tipo_cocina} "
+                    f"- Tiempos de comida incluidos: {', '.join(tiempos)} "
+                    f"- Utensilios disponibles: {', '.join(utensilios)} "
+                    f"- Restricciones / Alergias: {restringidos if restringidos else 'Ninguna'} "
+                    "Para cada día y tiempo, estructura: "
+                    "1. Nombre del platillo con un toque moderno. "
+                    f"2. Ingredientes precisos con costo estimado en pesos mexicanos adaptado a {tienda}. "
+                    "3. Preparación rápida y limpia usando ÚNICAMENTE los utensilios enlistados. "
+                    "Usa un formato en Markdown impecable."
+                )
+                
+                try:
+                    response = client.models.generate_content(
+                        model='gemini-2.5-flash',
+                        contents=prompt,
+                    )
+                    st.success("¡Tu plan culinario inteligente está listo! 🎉")
+                    st.markdown("---")
+                    st.markdown(response.text)
+                except Exception as e:
+                    st.error(f"Error al conectar con la IA: {e}")
+else:
+    st.info("👋 Ingresa tu API Key para desbloquear la experiencia KashCook.")
