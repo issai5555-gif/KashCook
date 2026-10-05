@@ -17,7 +17,7 @@ api_key = st.text_input("🔑 Ingresa tu token (AQ...):", type="password")
 
 if api_key:
     try:
-        # Convertimos tu token AQ... en credenciales OAuth válidas para Vertex AI
+        # Configuramos tu token AQ... como credencial OAuth oficial para Vertex AI
         creds = Credentials(token=api_key)
         client = genai.Client(
             vertexai=True,
@@ -90,8 +90,9 @@ if api_key:
                 )
                 
                 try:
+                    # Usamos gemini-1.5-flash que es el modelo plenamente compatible con tokens AQ en Vertex AI
                     response = client.models.generate_content(
-                        model='gemini-2.5-flash',
+                        model='gemini-1.5-flash',
                         contents=prompt,
                     )
                     st.success("¡Tu plan culinario inteligente está listo! 🎉")
@@ -100,4 +101,4 @@ if api_key:
                 except Exception as e:
                     st.error(f"Error al conectar con la IA: {e}")
 else:
-    st.info("👋 Ingresa tu token que empieza con 'AQ...' en el cuadro de arriba para comenzar.")
+    st.info("👋 Ingresa tu token que empieza con 'AQ...' en le cuadro de arriba para comenzar.")
