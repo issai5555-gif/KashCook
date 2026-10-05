@@ -12,15 +12,22 @@ st.title("🍳 KashCook AI")
 st.markdown("Tu sistema inteligente de planificación culinaria.")
 st.markdown("---")
 
-api_key = st.text_input("🔑 Ingresa tu credencial o token:", type="password")
+# Caja para tu credencial o token (AQ...)
+api_key = st.text_input("🔑 Ingresa tu credencial o token (AQ...):", type="password")
 
 if api_key:
+    # Configuramos las variables para Vertex AI con tu token y proyecto
     os.environ["GOOGLE_API_KEY"] = api_key
     
     try:
-        client = genai.Client(api_key=api_key)
+        # Inicialización oficial en modo Vertex AI para credenciales empresariales/Cloud
+        client = genai.Client(
+            vertexai=True,
+            project="1020780421572",
+            location="us-central1"
+        )
     except Exception as e:
-        st.error(f"Error al inicializar el cliente: {e}")
+        st.error(f"Error al inicializar el cliente Vertex AI: {e}")
 
     col1, col2 = st.columns(2)
 
@@ -112,9 +119,9 @@ if api_key:
                 )
                 
                 try:
-                    # Modelo altamente estable contra saturaciones
+                    # Usamos gemini-3.5-flash compatible con Vertex AI
                     response = client.models.generate_content(
-                        model='gemini-1.5-flash',
+                        model='gemini-3.5-flash',
                         contents=prompt,
                     )
                     st.success("¡Tu plan culinario inteligente está listo! 🎉")
