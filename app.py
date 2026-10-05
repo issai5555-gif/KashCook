@@ -16,11 +16,9 @@ st.markdown("---")
 api_key = st.text_input("🔑 Ingresa tu credencial o token:", type="password")
 
 if api_key:
-    # Configuramos la variable de entorno para evitar que busque metadata interna
     os.environ["GOOGLE_API_KEY"] = api_key
     
     try:
-        # Inicializamos el cliente estándar de genai usando la llave ingresada
         client = genai.Client(api_key=api_key)
     except Exception as e:
         st.error(f"Error al inicializar el cliente: {e}")
@@ -115,8 +113,9 @@ if api_key:
                 )
                 
                 try:
+                    # Actualizado al modelo sugerido por la API
                     response = client.models.generate_content(
-                        model='gemini-2.5-flash',
+                        model='gemini-3.8-flash',
                         contents=prompt,
                     )
                     st.success("¡Tu plan culinario inteligente está listo! 🎉")
