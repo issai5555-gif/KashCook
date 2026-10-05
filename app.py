@@ -12,7 +12,6 @@ st.title("🍳 KashCook AI")
 st.markdown("Tu sistema inteligente de planificación culinaria.")
 st.markdown("---")
 
-# Caja para tu credencial
 api_key = st.text_input("🔑 Ingresa tu credencial o token:", type="password")
 
 if api_key:
@@ -113,9 +112,9 @@ if api_key:
                 )
                 
                 try:
-                    # Actualizado al modelo sugerido por la API
+                    # Modelo altamente estable contra saturaciones
                     response = client.models.generate_content(
-                        model='gemini-3.8-flash',
+                        model='gemini-1.5-flash',
                         contents=prompt,
                     )
                     st.success("¡Tu plan culinario inteligente está listo! 🎉")
