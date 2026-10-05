@@ -24,7 +24,6 @@ if api_key:
     with col1:
         st.subheader("🏪 1. Elige tu Supermercado")
         st.markdown("Selecciona el establecimiento:")
-        # Botones modernos para tiendas de Chihuahua
         tienda_col1, tienda_col2 = st.columns(2)
         with tienda_col1:
             alsuper = st.checkbox("Alsuper", value=True)
@@ -38,21 +37,23 @@ if api_key:
         dias = st.slider("Días a planificar:", 1, 7, 3)
 
     with col2:
-        st.subheader("🍲 3. Estilos Culinarios (Puedes elegir varios)")
-        # Casillas múltiples para estilos de comida
+        st.subheader("👥 3. Comensales")
+        personas = st.slider("¿Para cuántas personas se va a cocinar?", 1, 10, 2)
+
+        st.subheader("🍲 4. Estilos Culinarios (Puedes elegir varios)")
         est_mex = st.checkbox("Mexicana Tradicional", value=True)
         est_nor = st.checkbox("Regional Norteña", value=True)
         est_asi = st.checkbox("Asiática", value=False)
         est_ita = st.checkbox("Italiana", value=False)
         est_fit = st.checkbox("Saludable / Fitness", value=False)
 
-        st.subheader("🍽️ 4. Tiempos de Comida")
+        st.subheader("🍽️ 5. Tiempos de Comida")
         c_des = st.checkbox("Desayuno", value=False)
         c_alm = st.checkbox("Almuerzo / Comida", value=True)
         c_cen = st.checkbox("Cena", value=True)
 
     st.markdown("---")
-    st.subheader("⚡ 5. Herramientas y Restricciones")
+    st.subheader("⚡ 6. Herramientas y Restricciones")
     
     col3, col4 = st.columns(2)
     with col3:
@@ -95,7 +96,7 @@ if api_key:
             with st.spinner("🤖 KashCook analizando costos, inventarios y diseñando tu menú..."):
                 prompt = (
                     f"Actúa como un Chef experto y un sistema de inteligencia artificial avanzado para la app KashCook. "
-                    f"Genera un plan de menús detallado y vanguardista para {dias} días. "
+                    f"Genera un plan de menús detallado y vanguardista para {dias} días, diseñado exactamente para {personas} personas. "
                     f"- Supermercados de referencia: {', '.join(tiendas_seleccionadas)} (Chihuahua, México) "
                     f"- Estilos de cocina combinados: {', '.join(estilos_seleccionados)} "
                     f"- Tiempos de comida incluidos: {', '.join(tiempos)} "
@@ -103,7 +104,7 @@ if api_key:
                     f"- Restricciones / Alergias: {restringidos if restringidos else 'Ninguna'} "
                     "Para cada día y tiempo, estructura: "
                     "1. Nombre del platillo con un toque moderno. "
-                    f"2. Ingredientes precisos con costo estimado en pesos mexicanos adaptado a {', '.join(tiendas_seleccionadas)}. "
+                    f"2. Ingredientes con cantidades exactas para {personas} personas y costo estimado en pesos mexicanos adaptado a {', '.join(tiendas_seleccionadas)}. "
                     "3. Preparación rápida y limpia usando ÚNICAMENTE los utensilios enlistados. "
                     "Usa un formato en Markdown impecable."
                 )
