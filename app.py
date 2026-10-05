@@ -23,21 +23,28 @@ if api_key:
 
     with col1:
         st.subheader("🏪 1. Elige tu Supermercado")
-        tienda = st.radio(
-            "Selecciona dónde harás tus compras:",
-            ["Alsuper", "Smart", "Walmart", "Mercado Local"],
-            horizontal=True
-        )
+        st.markdown("Selecciona el establecimiento:")
+        # Botones modernos para tiendas de Chihuahua
+        tienda_col1, tienda_col2 = st.columns(2)
+        with tienda_col1:
+            alsuper = st.checkbox("Alsuper", value=True)
+            smart = st.checkbox("Smart", value=False)
+            soriana = st.checkbox("Soriana", value=False)
+        with tienda_col2:
+            walmart = st.checkbox("Walmart", value=False)
+            aurrera = st.checkbox("Bodega Aurrerá", value=False)
         
         st.subheader("⏱ 2. Duración del Plan")
         dias = st.slider("Días a planificar:", 1, 7, 3)
 
     with col2:
-        st.subheader("🍲 3. Estilo Culinario")
-        tipo_cocina = st.selectbox(
-            "Estilo:",
-            ["Mexicana Tradicional", "Regional Norteña", "Asiática", "Italiana", "Saludable / Fitness", "Sorpréndeme"]
-        )
+        st.subheader("🍲 3. Estilos Culinarios (Puedes elegir varios)")
+        # Casillas múltiples para estilos de comida
+        est_mex = st.checkbox("Mexicana Tradicional", value=True)
+        est_nor = st.checkbox("Regional Norteña", value=True)
+        est_asi = st.checkbox("Asiática", value=False)
+        est_ita = st.checkbox("Italiana", value=False)
+        est_fit = st.checkbox("Saludable / Fitness", value=False)
 
         st.subheader("🍽️ 4. Tiempos de Comida")
         c_des = st.checkbox("Desayuno", value=False)
@@ -57,30 +64,46 @@ if api_key:
     with col4:
         restringidos = st.text_input("Alimentos prohibidos o alergias:", placeholder="Ej. Cebolla, mariscos, lácteos")
 
+    # Recolectar selecciones
+    tiendas_seleccionadas = []
+    if alsuper: tiendas_seleccionadas.append("Alsuper")
+    if smart: tiendas_seleccionadas.append("Smart")
+    if soriana: tiendas_seleccionadas.append("Soriana")
+    if walmart: tiendas_seleccionadas.append("Walmart")
+    if aurrera: tiendas_seleccionadas.append("Bodega Aurrerá")
+
+    estilos_seleccionados = []
+    if est_mex: estilos_seleccionados.append("Mexicana Tradicional")
+    if est_nor: estilos_seleccionados.append("Regional Norteña")
+    if est_asi: estilos_seleccionados.append("Asiática")
+    if est_ita: estilos_seleccionados.append("Italiana")
+    if est_fit: estilos_seleccionados.append("Saludable / Fitness")
+
     tiempos = []
-    if c_des:
-        tiempos.append("Desayuno")
-    if c_alm:
-        tiempos.append("Almuerzo")
-    if c_cen:
-        tiempos.append("Cena")
+    if c_des: tiempos.append("Desayuno")
+    if c_alm: tiempos.append("Almuerzo")
+    if c_cen: tiempos.append("Cena")
 
     if st.button("🚀 Generar Plan Inteligente con KashCook"):
         if not tiempos:
             st.warning("⚠ Por favor selecciona al menos un tiempo de comida.")
+        elif not tiendas_seleccionadas:
+            st.warning("⚠ Por favor selecciona al menos un supermercado.")
+        elif not estilos_seleccionados:
+            st.warning("⚠ Por favor selecciona al menos un estilo culinario.")
         else:
             with st.spinner("🤖 KashCook analizando costos, inventarios y diseñando tu menú..."):
                 prompt = (
                     f"Actúa como un Chef experto y un sistema de inteligencia artificial avanzado para la app KashCook. "
                     f"Genera un plan de menús detallado y vanguardista para {dias} días. "
-                    f"- Tienda de referencia: {tienda} (Chihuahua, México) "
-                    f"- Tipo de cocina: {tipo_cocina} "
+                    f"- Supermercados de referencia: {', '.join(tiendas_seleccionadas)} (Chihuahua, México) "
+                    f"- Estilos de cocina combinados: {', '.join(estilos_seleccionados)} "
                     f"- Tiempos de comida incluidos: {', '.join(tiempos)} "
                     f"- Utensilios disponibles: {', '.join(utensilios)} "
                     f"- Restricciones / Alergias: {restringidos if restringidos else 'Ninguna'} "
                     "Para cada día y tiempo, estructura: "
                     "1. Nombre del platillo con un toque moderno. "
-                    f"2. Ingredientes precisos con costo estimado en pesos mexicanos adaptado a {tienda}. "
+                    f"2. Ingredientes precisos con costo estimado en pesos mexicanos adaptado a {', '.join(tiendas_seleccionadas)}. "
                     "3. Preparación rápida y limpia usando ÚNICAMENTE los utensilios enlistados. "
                     "Usa un formato en Markdown impecable."
                 )
