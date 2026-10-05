@@ -1,3 +1,4 @@
+import os
 import streamlit as st
 from google import genai
 
@@ -11,20 +12,18 @@ st.title("🍳 KashCook AI")
 st.markdown("Tu sistema inteligente de planificación culinaria.")
 st.markdown("---")
 
-# Caja para tu clave o token de Google Cloud (AQ...)
-api_key = st.text_input("🔑 Ingresa tu credencial o token (empieza con AQ...):", type="password")
+# Caja para tu credencial
+api_key = st.text_input("🔑 Ingresa tu credencial o token:", type="password")
 
 if api_key:
+    # Configuramos la variable de entorno para evitar que busque metadata interna
+    os.environ["GOOGLE_API_KEY"] = api_key
+    
     try:
-        # Inicializamos en modo Vertex AI para aceptar credenciales de Google Cloud
-        client = genai.Client(
-            vertexai=True,
-            project="1020780421572", # Tu proyecto registrado
-            location="us-central1"
-        )
-    except Exception as e:
-        # Respaldo por si se requiere pasar la llave directamente
+        # Inicializamos el cliente estándar de genai usando la llave ingresada
         client = genai.Client(api_key=api_key)
+    except Exception as e:
+        st.error(f"Error al inicializar el cliente: {e}")
 
     col1, col2 = st.columns(2)
 
