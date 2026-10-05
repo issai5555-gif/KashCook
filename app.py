@@ -9,7 +9,7 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# Estilos CSS personalizados para un look vanguardista, limpio y futurista
+# Estilos CSS personalizados para un look vanguardista
 st.markdown("""
 
 """, unsafe_allow_html=True)
