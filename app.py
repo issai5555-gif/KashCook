@@ -1,6 +1,6 @@
-import os
 import streamlit as st
 from google import genai
+from google.oauth2.credentials import Credentials
 
 st.set_page_config(
     page_title="KashCook | Smart Kitchen",
@@ -12,58 +12,52 @@ st.title("🍳 KashCook AI")
 st.markdown("Tu sistema inteligente de planificación culinaria.")
 st.markdown("---")
 
-# Caja para tu credencial o token (AQ...)
-api_key = st.text_input("🔑 Ingresa tu credencial o token (AQ...):", type="password")
+# Caja para tu token que empieza con AQ...
+api_key = st.text_input("🔑 Ingresa tu token (AQ...):", type="password")
 
 if api_key:
-    # Configuramos las variables para Vertex AI con tu token y proyecto
-    os.environ["GOOGLE_API_KEY"] = api_key
-    
     try:
-        # Inicialización oficial en modo Vertex AI para credenciales empresariales/Cloud
+        # Convertimos tu token AQ... en credenciales OAuth válidas para Vertex AI
+        creds = Credentials(token=api_key)
         client = genai.Client(
             vertexai=True,
             project="1020780421572",
-            location="us-central1"
+            location="us-central1",
+            credentials=creds
         )
     except Exception as e:
-        st.error(f"Error al inicializar el cliente Vertex AI: {e}")
+        st.error(f"Error al configurar las credenciales: {e}")
 
     col1, col2 = st.columns(2)
 
     with col1:
         st.subheader("🏪 1. Elige tu Supermercado")
-        st.markdown("Selecciona el establecimiento:")
-        tienda_col1, tienda_col2 = st.columns(2)
-        with tienda_col1:
-            alsuper = st.checkbox("Alsuper", value=True)
-            smart = st.checkbox("Smart", value=False)
-            soriana = st.checkbox("Soriana", value=False)
-        with tienda_col2:
-            walmart = st.checkbox("Walmart", value=False)
-            aurrera = st.checkbox("Bodega Aurrerá", value=False)
+        alsuper = st.checkbox("Alsuper", value=True)
+        smart = st.checkbox("Smart", value=False)
+        soriana = st.checkbox("Soriana", value=False)
+        walmart = st.checkbox("Walmart", value=False)
+        aurrera = st.checkbox("Bodega Aurrerá", value=False)
         
-        st.subheader("⏱ 2. Duración del Plan")
         dias = st.slider("Días a planificar:", 1, 7, 3)
 
     with col2:
-        st.subheader("👥 3. Comensales")
+        st.subheader("👥 2. Comensales")
         personas = st.slider("¿Para cuántas personas se va a cocinar?", 1, 10, 2)
 
-        st.subheader("🍲 4. Estilos Culinarios (Puedes elegir varios)")
+        st.subheader("🍲 3. Estilos Culinarios")
         est_mex = st.checkbox("Mexicana Tradicional", value=True)
         est_nor = st.checkbox("Regional Norteña", value=True)
         est_asi = st.checkbox("Asiática", value=False)
         est_ita = st.checkbox("Italiana", value=False)
         est_fit = st.checkbox("Saludable / Fitness", value=False)
 
-        st.subheader("🍽️ 5. Tiempos de Comida")
+        st.subheader("🍽️ 4. Tiempos de Comida")
         c_des = st.checkbox("Desayuno", value=False)
         c_alm = st.checkbox("Almuerzo / Comida", value=True)
         c_cen = st.checkbox("Cena", value=True)
 
     st.markdown("---")
-    st.subheader("⚡ 6. Herramientas y Restricciones")
+    st.subheader("⚡ 5. Herramientas y Restricciones")
     
     col3, col4 = st.columns(2)
     with col3:
@@ -75,53 +69,29 @@ if api_key:
     with col4:
         restringidos = st.text_input("Alimentos prohibidos o alergias:", placeholder="Ej. Cebolla, mariscos, lácteos")
 
-    tiendas_seleccionadas = []
-    if alsuper: tiendas_seleccionadas.append("Alsuper")
-    if smart: tiendas_seleccionadas.append("Smart")
-    if soriana: tiendas_seleccionadas.append("Soriana")
-    if walmart: tiendas_seleccionadas.append("Walmart")
-    if aurrera: tiendas_seleccionadas.append("Bodega Aurrerá")
-
-    estilos_seleccionados = []
-    if est_mex: estilos_seleccionados.append("Mexicana Tradicional")
-    if est_nor: estilos_seleccionados.append("Regional Norteña")
-    if est_asi: estilos_seleccionados.append("Asiática")
-    if est_ita: estilos_seleccionados.append("Italiana")
-    if est_fit: estilos_seleccionados.append("Saludable / Fitness")
-
-    tiempos = []
-    if c_des: tiempos.append("Desayuno")
-    if c_alm: tiempos.append("Almuerzo")
-    if c_cen: tiempos.append("Cena")
+    tiendas_seleccionadas = [t for t, sel in [("Alsuper", alsuper), ("Smart", smart), ("Soriana", soriana), ("Walmart", walmart), ("Bodega Aurrerá", aurrera)] if sel]
+    estilos_seleccionados = [e for e, sel in [("Mexicana Tradicional", est_mex), ("Regional Norteña", est_nor), ("Asiática", est_asi), ("Italiana", est_ita), ("Saludable / Fitness", est_fit)] if sel]
+    tiempos = [t for t, sel in [("Desayuno", c_des), ("Almuerzo", c_alm), ("Cena", c_cen)] if sel]
 
     if st.button("🚀 Generar Plan Inteligente con KashCook"):
-        if not tiempos:
-            st.warning("⚠ Por favor selecciona al menos un tiempo de comida.")
-        elif not tiendas_seleccionadas:
-            st.warning("⚠ Por favor selecciona al menos un supermercado.")
-        elif not estilos_seleccionados:
-            st.warning("⚠ Por favor selecciona al menos un estilo culinario.")
+        if not tiempos or not tiendas_seleccionadas or not estilos_seleccionados:
+            st.warning("⚠ Por favor selecciona al menos un tiempo, un supermercado y un estilo culinario.")
         else:
             with st.spinner("🤖 KashCook analizando costos, inventarios y diseñando tu menú..."):
                 prompt = (
-                    f"Actúa como un Chef experto y un sistema de inteligencia artificial avanzado para la app KashCook. "
-                    f"Genera un plan de menús detallado y vanguardista para {dias} días, diseñado exactamente para {personas} personas. "
-                    f"- Supermercados de referencia: {', '.join(tiendas_seleccionadas)} (Chihuahua, México) "
-                    f"- Estilos de cocina combinados: {', '.join(estilos_seleccionados)} "
-                    f"- Tiempos de comida incluidos: {', '.join(tiempos)} "
-                    f"- Utensilios disponibles: {', '.join(utensilios)} "
-                    f"- Restricciones / Alergias: {restringidos if restringidos else 'Ninguna'} "
-                    "Para cada día y tiempo, estructura: "
-                    "1. Nombre del platillo con un toque moderno. "
-                    f"2. Ingredientes con cantidades exactas para {personas} personas y costo estimado en pesos mexicanos adaptado a {', '.join(tiendas_seleccionadas)}. "
-                    "3. Preparación rápida y limpia usando ÚNICAMENTE los utensilios enlistados. "
-                    "Usa un formato en Markdown impecable."
+                    f"Actúa como un Chef experto para la app KashCook. "
+                    f"Genera un plan de menús detallado para {dias} días para {personas} personas. "
+                    f"- Supermercados: {', '.join(tiendas_seleccionadas)} (Chihuahua, México) "
+                    f"- Estilos: {', '.join(estilos_seleccionados)} "
+                    f"- Tiempos: {', '.join(tiempos)} "
+                    f"- Utensilios: {', '.join(utensilios)} "
+                    f"- Restricciones: {restringidos if restringidos else 'Ninguna'} "
+                    "Estructura cada día con nombre del platillo, ingredientes con cantidades y costos estimados en pesos mexicanos, y preparación rápida."
                 )
                 
                 try:
-                    # Usamos gemini-3.5-flash compatible con Vertex AI
                     response = client.models.generate_content(
-                        model='gemini-3.5-flash',
+                        model='gemini-2.5-flash',
                         contents=prompt,
                     )
                     st.success("¡Tu plan culinario inteligente está listo! 🎉")
@@ -130,4 +100,4 @@ if api_key:
                 except Exception as e:
                     st.error(f"Error al conectar con la IA: {e}")
 else:
-    st.info("👋 Ingresa tu credencial en el cuadro de arriba para comenzar.")
+    st.info("👋 Ingresa tu token que empieza con 'AQ...' en el cuadro de arriba para comenzar.")
