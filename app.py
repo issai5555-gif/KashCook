@@ -11,11 +11,20 @@ st.title("🍳 KashCook AI")
 st.markdown("Tu sistema inteligente de planificación culinaria.")
 st.markdown("---")
 
-# Forzamos la caja de texto para evitar que lea claves viejas guardadas
-api_key = st.text_input("🔑 Ingresa tu Google Gemini API Key (empieza con AIzaSy...):", type="password")
+# Caja para tu clave o token de Google Cloud (AQ...)
+api_key = st.text_input("🔑 Ingresa tu credencial o token (empieza con AQ...):", type="password")
 
 if api_key:
-    client = genai.Client(api_key=api_key)
+    try:
+        # Inicializamos en modo Vertex AI para aceptar credenciales de Google Cloud
+        client = genai.Client(
+            vertexai=True,
+            project="1020780421572", # Tu proyecto registrado
+            location="us-central1"
+        )
+    except Exception as e:
+        # Respaldo por si se requiere pasar la llave directamente
+        client = genai.Client(api_key=api_key)
 
     col1, col2 = st.columns(2)
 
@@ -117,4 +126,4 @@ if api_key:
                 except Exception as e:
                     st.error(f"Error al conectar con la IA: {e}")
 else:
-    st.info("👋 Ingresa tu API Key de AI Studio (debe empezar con 'AIzaSy...') en el cuadro de arriba para desbloquear KashCook.")
+    st.info("👋 Ingresa tu credencial en el cuadro de arriba para comenzar.")
