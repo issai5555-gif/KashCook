@@ -1,4 +1,3 @@
-Python
 import streamlit as st
 from google import genai
 
@@ -30,7 +29,7 @@ if api_key:
             horizontal=True
         )
         
-        st.subheader("⏱️️ 2. Duración del Plan")
+        st.subheader("⏱ 2. Duración del Plan")
         dias = st.slider("Días a planificar:", 1, 7, 3)
 
     with col2:
