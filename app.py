@@ -11,10 +11,8 @@ st.title("🍳 KashCook AI")
 st.markdown("Tu sistema inteligente de planificación culinaria.")
 st.markdown("---")
 
-try:
-    api_key = st.secrets["GOOGLE_API_KEY"]
-except:
-    api_key = st.text_input("🔑 Ingresa tu Google Gemini API Key:", type="password")
+# Forzamos la caja de texto para evitar que lea claves viejas guardadas
+api_key = st.text_input("🔑 Ingresa tu Google Gemini API Key (empieza con AIzaSy...):", type="password")
 
 if api_key:
     client = genai.Client(api_key=api_key)
@@ -65,7 +63,6 @@ if api_key:
     with col4:
         restringidos = st.text_input("Alimentos prohibidos o alergias:", placeholder="Ej. Cebolla, mariscos, lácteos")
 
-    # Recolectar selecciones
     tiendas_seleccionadas = []
     if alsuper: tiendas_seleccionadas.append("Alsuper")
     if smart: tiendas_seleccionadas.append("Smart")
@@ -120,4 +117,4 @@ if api_key:
                 except Exception as e:
                     st.error(f"Error al conectar con la IA: {e}")
 else:
-    st.info("👋 Ingresa tu API Key para desbloquear la experiencia KashCook.")
+    st.info("👋 Ingresa tu API Key de AI Studio (debe empezar con 'AIzaSy...') en el cuadro de arriba para desbloquear KashCook.")
