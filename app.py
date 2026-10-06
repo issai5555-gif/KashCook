@@ -1,5 +1,6 @@
 import streamlit as st
 from groq import Groq
+from fpdf import FPDF
 
 st.set_page_config(
     page_title="KashCook | Smart Kitchen",
@@ -77,14 +78,14 @@ if groq_key:
     estilos_seleccionados = [e for e, sel in [("Mexicana Tradicional", est_mex), ("Regional Norteña", est_nor), ("Asiática", est_asi), ("Italiana", est_ita), ("Saludable / Fitness", est_fit)] if sel]
     tiempos = [t for t, sel in [("Desayuno", c_des), ("Almuerzo", c_alm), ("Cena", c_cen)] if sel]
 
-    if st.button("🚀 Generar Plan Inteligente y Lista de Compras con Presupuesto"):
+    if st.button("🚀 Generar Plan Inteligente, Recetas y Presupuesto en PDF"):
         if not tiempos or not tiendas_seleccionadas or not estilos_seleccionados:
             st.warning("⚠ Por favor selecciona al menos un tiempo, un supermercado y un estilo culinario.")
         else:
-            with st.spinner("🤖 KashCook calculando costos, ajustando inventarios al presupuesto y diseñando tu menú..."):
+            with st.spinner("🤖 KashCook calculando costos de insumos, recetas y generando tu documento PDF..."):
                 prompt_text = (
                     f"Actúa como un Chef experto y asesor financiero de hogar para la app KashCook. "
-                    f"Genera un plan de menús detallado y una lista de compras exacta para {dias} días para {personas} personas, "
+                    f"Genera un plan de menús detallado con recetas y una lista de compras con costos exacta para {dias} días para {personas} personas, "
                     f"respetando estrictamente un presupuesto máximo de **${presupuesto} pesos mexicanos (MXN)**. "
                     f"- Supermercados de referencia: {', '.join(tiendas_seleccionadas)} (Chihuahua, Chihuahua, México) "
                     f"- Estilos culinarios: {', '.join(estilos_seleccionados)} "
@@ -92,13 +93,13 @@ if groq_key:
                     f"- Utensilios disponibles: {', '.join(utensilios)} "
                     f"- Restricciones / Alergias: {restringidos if restringidos else 'Ninguna'} "
                     "\nEstructura tu respuesta exactamente en dos secciones claras:"
-                    "\n1. **Plan de Menús por Día** (nombre del platillo y preparación rápida)."
-                    "\n2. **Lista de Compras Optimizada para el Presupuesto** (producto, cantidad exacta requerida y costo estimado unitario/total en MXN basado en precios reales de Chihuahua, asegurando que el total sumado no rebase los $" + str(presupuesto) + " MXN)."
+                    "\n1. **Plan de Menús y Recetas por Día** (nombre del platillo, ingredientes con cantidades por persona y pasos de preparación rápida)."
+                    "\n2. **Lista de Compras y Costos de Insumos** (producto, cantidad exacta requerida y costo estimado unitario/total en MXN basado en precios reales de Chihuahua, asegurando que el total sumado no rebase los $" + str(presupuesto) + " MXN)."
                 )
                 
                 try:
                     completion = client.chat.completions.create(
-                        model="openai/gpt-oss-20b",  # Modelo actual y activo en Groq
+                        model="openai/gpt-oss-20b",
                         messages=[
                             {"role": "user", "content": prompt_text}
                         ],
@@ -106,10 +107,45 @@ if groq_key:
                     )
                     
                     content = completion.choices[0].message.content
-                    st.success("¡Tu plan financiero y culinario está listo! 🎉")
+                    st.success("¡Tu plan culinario, recetas y cotización están listos! 🎉")
                     st.markdown("---")
                     st.markdown(content)
+                    
+                    # Generación del PDF con FPDF
+                    class PDF(FPDF):
+                        def header(self):
+                            self.set_font('helvetica', 'B', 14)
+                            self.cell(0, 10, 'KashCook - Plan de Compras, Recetas y Presupuesto', 0, 1, 'C')
+                            self.set_font('helvetica', 'I', 10)
+                            self.cell(0, 6, 'Chihuahua, Chihuahua, Mexico', 0, 1, 'C')
+                            self.ln(5)
+
+                        def footer(self):
+                            self.set_y(-15)
+                            self.set_font('helvetica', 'I', 8)
+                            self.cell(0, 10, f'Generado por KashCook AI - Página {self.page_no()}', 0, 0, 'C')
+
+                    pdf = PDF()
+                    pdf.add_page()
+                    pdf.set_font('helvetica', '', 10)
+                    
+                    # Limpieza de caracteres para compatibilidad de codificación en PDF
+                    safe_text = content.encode('latin-1', 'replace').decode('latin-1')
+                    
+                    for line in safe_text.split('\n'):
+                        pdf.multi_cell(0, 5, line)
+                    
+                    pdf_bytes = pdf.output()
+
+                    # Botón de descarga en PDF
+                    st.download_button(
+                        label="📄 Descargar Recetas, Costos y Menú en PDF",
+                        data=pdf_bytes,
+                        file_name="KashCook_Recetas_Presupuesto.pdf",
+                        mime="application/pdf"
+                    )
+                    
                 except Exception as e:
-                    st.error(f"Error al conectar con Groq: {e}")
+                    st.error(f"Error al conectar con Groq o generar PDF: {e}")
 else:
     st.info("👋 Configura tu clave en Streamlit Secrets o ingrésala para comenzar.")
