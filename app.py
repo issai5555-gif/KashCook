@@ -1,6 +1,6 @@
 import streamlit as st
-from google import genai
-from google.oauth2.credentials import Credentials
+import requests
+import json
 
 st.set_page_config(
     page_title="KashCook | Smart Kitchen",
@@ -13,21 +13,9 @@ st.markdown("Tu sistema inteligente de planificación culinaria.")
 st.markdown("---")
 
 # Caja para tu token que empieza con AQ...
-api_key = st.text_input("🔑 Ingresa tu token (AQ...):", type="password")
+token_input = st.text_input("🔑 Ingresa tu token (AQ...):", type="password")
 
-if api_key:
-    try:
-        # Configuramos tu token AQ... como credencial OAuth oficial para Vertex AI
-        creds = Credentials(token=api_key)
-        client = genai.Client(
-            vertexai=True,
-            project="1020780421572",
-            location="us-central1",
-            credentials=creds
-        )
-    except Exception as e:
-        st.error(f"Error al configurar las credenciales: {e}")
-
+if token_input:
     col1, col2 = st.columns(2)
 
     with col1:
@@ -78,7 +66,7 @@ if api_key:
             st.warning("⚠ Por favor selecciona al menos un tiempo, un supermercado y un estilo culinario.")
         else:
             with st.spinner("🤖 KashCook analizando costos, inventarios y diseñando tu menú..."):
-                prompt = (
+                prompt_text = (
                     f"Actúa como un Chef experto para la app KashCook. "
                     f"Genera un plan de menús detallado para {dias} días para {personas} personas. "
                     f"- Supermercados: {', '.join(tiendas_seleccionadas)} (Chihuahua, México) "
@@ -89,16 +77,33 @@ if api_key:
                     "Estructura cada día con nombre del platillo, ingredientes con cantidades y costos estimados en pesos mexicanos, y preparación rápida."
                 )
                 
+                # Petición HTTP directa usando el token AQ como Bearer token de Vertex AI
+                url = "https://us-central1-aiplatform.googleapis.com/v1/projects/1020780421572/locations/us-central1/publishers/google/models/gemini-1.5-flash:generateContent"
+                
+                headers = {
+                    "Authorization": f"Bearer {token_input.strip()}",
+                    "Content-Type": "application/json"
+                }
+                
+                payload = {
+                    "contents": [{
+                        "role": "user",
+                        "parts": [{"text": prompt_text}]
+                    }]
+                }
+                
                 try:
-                    # Usamos gemini-1.5-flash que es el modelo plenamente compatible con tokens AQ en Vertex AI
-                    response = client.models.generate_content(
-                        model='gemini-1.5-flash',
-                        contents=prompt,
-                    )
-                    st.success("¡Tu plan culinario inteligente está listo! 🎉")
-                    st.markdown("---")
-                    st.markdown(response.text)
+                    response = requests.post(url, headers=headers, json=payload)
+                    
+                    if response.status_code == 200:
+                        res_json = response.json()
+                        content = res_json["candidates"][0]["content"]["parts"][0]["text"]
+                        st.success("¡Tu plan culinario inteligente está listo! 🎉")
+                        st.markdown("---")
+                        st.markdown(content)
+                    else:
+                        st.error(f"Error de la API ({response.status_code}): {response.text}")
                 except Exception as e:
                     st.error(f"Error al conectar con la IA: {e}")
 else:
-    st.info("👋 Ingresa tu token que empieza con 'AQ...' en le cuadro de arriba para comenzar.")
+    st.info("👋 Ingresa tu token que empieza con 'AQ...' en el cuadro de arriba para comenzar.")
