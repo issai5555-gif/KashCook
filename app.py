@@ -188,7 +188,7 @@ if groq_key:
                         upper_line = clean_line.upper()
                         is_header = any(keyword in upper_line for keyword in ["DIA", "DÍA", "LISTA DE COMPRAS", "PLAN DE MENUS", "COSTOS", "PRESUPUESTO"])
                         
-                        # Limpieza y saneamiento estricto de etiquetas HTML para evitar errores de sintaxis en ReportLab
+                        # Limpieza y saneamiento estricto de etiquetas HTML
                         safe_line = (
                             clean_line.replace('&', '&')
                                       .replace('<', '<')
