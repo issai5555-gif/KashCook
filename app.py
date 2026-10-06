@@ -1,6 +1,5 @@
 import streamlit as st
-import requests
-import json
+from groq import Groq
 
 st.set_page_config(
     page_title="KashCook | Smart Kitchen",
@@ -12,10 +11,18 @@ st.title("🍳 KashCook AI")
 st.markdown("Tu sistema inteligente de planificación culinaria y financiera.")
 st.markdown("---")
 
-# Caja para tu token actual
-token_input = st.text_input("🔑 Ingresa tu token:", type="password")
+# Carga automática desde los secretos de Streamlit Cloud, o input manual de respaldo
+groq_key = st.secrets.get("GROQ_API_KEY", "")
 
-if token_input:
+if not groq_key:
+    groq_key = st.text_input("🔑 Ingresa tu Groq API Key (gsk_...):", type="password")
+
+if groq_key:
+    try:
+        client = Groq(api_key=groq_key.strip())
+    except Exception as e:
+        st.error(f"Error al inicializar el cliente: {e}")
+
     col1, col2 = st.columns(2)
 
     with col1:
@@ -32,7 +39,6 @@ if token_input:
         st.subheader("👥 2. Comensales y Presupuesto")
         personas = st.slider("¿Para cuántas personas se va a cocinar?", 1, 10, 2)
         
-        # NUEVO: Input de presupuesto en pesos mexicanos
         presupuesto = st.number_input(
             "💰 Presupuesto máximo (MXN):", 
             min_value=200, 
@@ -90,33 +96,20 @@ if token_input:
                     "\n2. **Lista de Compras Optimizada para el Presupuesto** (producto, cantidad exacta requerida y costo estimado unitario/total en MXN basado en precios reales de Chihuahua, asegurando que el total sumado no rebase los $" + str(presupuesto) + " MXN)."
                 )
                 
-                # Petición HTTP directa a la API de Vertex AI
-                url = "https://us-central1-aiplatform.googleapis.com/v1/projects/gen-lang-client-0845513858/locations/us-central1/publishers/google/models/gemini-1.5-flash:generateContent"
-                
-                headers = {
-                    "Authorization": f"Bearer {token_input.strip()}",
-                    "Content-Type": "application/json"
-                }
-                
-                payload = {
-                    "contents": [{
-                        "role": "user",
-                        "parts": [{"text": prompt_text}]
-                    }]
-                }
-                
                 try:
-                    response = requests.post(url, headers=headers, json=payload)
+                    completion = client.chat.completions.create(
+                        model="llama-3.3-70b-versatile",
+                        messages=[
+                            {"role": "user", "content": prompt_text}
+                        ],
+                        temperature=0.7,
+                    )
                     
-                    if response.status_code == 200:
-                        res_json = response.json()
-                        content = res_json["candidates"][0]["content"]["parts"][0]["text"]
-                        st.success("¡Tu plan financiero y culinario está listo! 🎉")
-                        st.markdown("---")
-                        st.markdown(content)
-                    else:
-                        st.error(f"Error HTTP {response.status_code}: {response.text}")
+                    content = completion.choices[0].message.content
+                    st.success("¡Tu plan financiero y culinario está listo! 🎉")
+                    st.markdown("---")
+                    st.markdown(content)
                 except Exception as e:
-                    st.error(f"Error de conexión: {e}")
+                    st.error(f"Error al conectar con Groq: {e}")
 else:
-    st.info("👋 Ingresa tu token para comenzar.")
+    st.info("👋 Configura tu clave en Streamlit Secrets o ingrésala para comenzar.")
