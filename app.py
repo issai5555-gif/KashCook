@@ -85,7 +85,7 @@ if groq_key:
             with st.spinner("🤖 KashCook calculando costos exactos de insumos en Alsuper y generando tu documento PDF..."):
                 prompt_text = (
                     f"Actúa como un Chef experto y asesor financiero de hogar para la app KashCook. "
-                    f"Genera un plan de menús detallado con recetas y una lista de compras con costos estimada obligatoria para cada ingrediente cotizada en **Alsuper (Chihuahua, Chih.)** para {dias} días y {personas} personas, "
+                    f"Genera un plan de menús detallado con recetas y una lista de compras con costos obligatoria y detallada cotizada en **Alsuper (Chihuahua, Chih.)** para {dias} días y {personas} personas, "
                     f"respetando estrictamente un presupuesto máximo de **${presupuesto} pesos mexicanos (MXN)**. "
                     f"- Supermercado principal: Alsuper "
                     f"- Estilos culinarios: {', '.join(estilos_seleccionados)} "
@@ -111,7 +111,7 @@ if groq_key:
                     st.markdown("---")
                     st.markdown(content)
                     
-                    # Generación profesional de PDF blindada contra desbordamiento horizontal
+                    # Generación profesional de PDF con control total de multi_cell
                     pdf = FPDF(orientation='P', unit='mm', format='A4')
                     pdf.set_auto_page_break(auto=True, margin=15)
                     pdf.add_page()
@@ -126,40 +126,38 @@ if groq_key:
                     pdf.line(10, pdf.get_y(), 200, pdf.get_y())
                     pdf.ln(6)
                     
-                    # Procesamiento seguro de líneas para evitar el error de caracteres anchos o espacios
-                    pdf.set_font('helvetica', '', 9.5)
+                    # Limpieza radical de caracteres especiales problemáticos (espacios de no separación, flechas, etc.)
+                    sanitized_content = (
+                        content.replace('\u202f', ' ')
+                               .replace('\xa0', ' ')
+                               .replace('–', '-')
+                               .replace('—', '-')
+                    )
                     
-                    cleaned_content = content.encode('latin-1', 'ignore').decode('latin-1')
+                    pdf.set_font('helvetica', '', 10)
                     
-                    for raw_line in cleaned_content.split('\n'):
-                        line = raw_line.replace('*', '').replace('#', '').strip()
+                    for raw_line in sanitized_content.split('\n'):
+                        clean_line = raw_line.replace('*', '').replace('#', '').strip()
                         
-                        if not line:
+                        if not clean_line:
                             pdf.ln(3)
                             continue
                         
-                        # Detectar títulos de sección o encabezados principales
-                        is_header = any(keyword in raw_line.upper() for keyword in ["DÍA", "DIA", "LISTA DE COMPRAS", "PLAN DE MENÚS", "COSTOS", "RECETAS"])
+                        # Detectar títulos de sección o días para estilizarlos
+                        upper_line = clean_line.upper()
+                        is_section_header = any(keyword in upper_line for keyword in ["DIA", "DÍA", "LISTA DE COMPRAS", "PLAN DE MENUS", "COSTOS", "PRESUPUESTO"])
                         
-                        if is_header and len(line) < 60:
-                            pdf.ln(3)
+                        if is_section_header and len(clean_line) < 60:
+                            pdf.ln(4)
                             pdf.set_font('helvetica', 'B', 11)
                             pdf.set_text_color(20, 80, 120)
-                            pdf.cell(0, 6, line[:90], 0, 1)
-                            pdf.set_font('helvetica', '', 9.5)
+                            pdf.multi_cell(0, 6, clean_line)
+                            pdf.set_font('helvetica', '', 10)
                             pdf.set_text_color(0, 0, 0)
                         else:
-                            # Cortar de forma segura líneas largas para prevenir errores de ancho en FPDF
-                            while len(line) > 95:
-                                split_idx = line[:95].rfind(' ')
-                                if split_idx == -1: 
-                                    split_idx = 95
-                                pdf.cell(0, 5, line[:split_idx], 0, 1)
-                                line = line[split_idx:].strip()
-                            if line:
-                                pdf.cell(0, 5, line, 0, 1)
+                            pdf.multi_cell(0, 5, clean_line)
                     
-                    # Extracción formal y segura del flujo de bytes
+                    # Codificación final segura a bytes estándar
                     pdf_output = pdf.output(dest='S')
                     if isinstance(pdf_output, str):
                         pdf_bytes = pdf_output.encode('latin-1', 'ignore')
