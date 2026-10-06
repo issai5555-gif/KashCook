@@ -92,9 +92,9 @@ if groq_key:
                     f"- Tiempos incluidos: {', '.join(tiempos)} "
                     f"- Utensilios disponibles: {', '.join(utensilios)} "
                     f"- Restricciones / Alergias: {restringidos if restringidos else 'Ninguna'} "
-                    "\nEstructura tu respuesta exactamente en dos secciones claras:"
-                    "\n1. **Plan de Menús y Recetas por Día** (nombre del platillo, ingredientes con cantidades por persona y pasos de preparación rápida)."
-                    "\n2. **Lista de Compras y Costos de Insumos** (producto, cantidad exacta requerida y costo estimado unitario/total en MXN basado en precios reales de Chihuahua, asegurando que el total sumado no rebase los $" + str(presupuesto) + " MXN)."
+                    "\nEstructura tu respuesta limpiamente en párrafos o listas con guiones (evita tablas complejas de Markdown), separando:"
+                    "\n1. **Plan de Menús y Recetas por Día** (nombre del platillo, ingredientes con cantidades y pasos de preparación)."
+                    "\n2. **Lista de Compras y Costos de Insumos** (producto, cantidad y costo estimado en MXN, asegurando que la suma no rebase los $" + str(presupuesto) + " MXN)."
                 )
                 
                 try:
@@ -111,7 +111,7 @@ if groq_key:
                     st.markdown("---")
                     st.markdown(content)
                     
-                    # Generación del PDF con FPDF corregido a bytes
+                    # Generación del PDF con FPDF protegido contra desbordamiento
                     class PDF(FPDF):
                         def header(self):
                             self.set_font('helvetica', 'B', 14)
@@ -129,11 +129,21 @@ if groq_key:
                     pdf.add_page()
                     pdf.set_font('helvetica', '', 10)
                     
-                    # Limpieza de caracteres para compatibilidad de codificación en PDF
+                    # Limpieza de caracteres y protección contra líneas demasiado largas
                     safe_text = content.encode('latin-1', 'replace').decode('latin-1')
                     
                     for line in safe_text.split('\n'):
-                        pdf.multi_cell(0, 5, line)
+                        clean_line = line.replace('*', '').replace('#', '')
+                        if len(clean_line.strip()) == 0:
+                            pdf.ln(3)
+                            continue
+                        
+                        # Si una línea es muy larga, la divide en bloques seguros para evitar errores de espacio
+                        try:
+                            pdf.multi_cell(0, 5, clean_line)
+                        except Exception:
+                            for i in range(0, len(clean_line), 90):
+                                pdf.multi_cell(0, 5, clean_line[i:i+90])
                     
                     pdf_bytes = bytes(pdf.output())
 
