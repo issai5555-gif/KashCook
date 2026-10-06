@@ -1,6 +1,5 @@
 import streamlit as st
 import requests
-import json
 
 st.set_page_config(
     page_title="KashCook | Smart Kitchen",
@@ -12,7 +11,7 @@ st.title("🍳 KashCook AI")
 st.markdown("Tu sistema inteligente de planificación culinaria.")
 st.markdown("---")
 
-# Caja para tu token que empieza con AQ...
+# Caja para tu token AQ...
 token_input = st.text_input("🔑 Ingresa tu token (AQ...):", type="password")
 
 if token_input:
@@ -77,8 +76,8 @@ if token_input:
                     "Estructura cada día con nombre del platillo, ingredientes con cantidades y costos estimados en pesos mexicanos, y preparación rápida."
                 )
                 
-                # Petición HTTP directa usando el token AQ como Bearer token de Vertex AI
-                url = "https://us-central1-aiplatform.googleapis.com/v1/projects/1020780421572/locations/us-central1/publishers/google/models/gemini-1.5-flash:generateContent"
+                # Endpoint oficial de Generative Language usando el token AQ como Bearer
+                url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent"
                 
                 headers = {
                     "Authorization": f"Bearer {token_input.strip()}",
@@ -87,7 +86,6 @@ if token_input:
                 
                 payload = {
                     "contents": [{
-                        "role": "user",
                         "parts": [{"text": prompt_text}]
                     }]
                 }
@@ -106,4 +104,4 @@ if token_input:
                 except Exception as e:
                     st.error(f"Error al conectar con la IA: {e}")
 else:
-    st.info("👋 Ingresa tu token que empieza con 'AQ...' en el cuadro de arriba para comenzar.")
+    st.info("👋 Ingresa tu token AQ... para comenzar.")
