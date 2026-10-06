@@ -1,6 +1,12 @@
 import streamlit as st
 from groq import Groq
-from fpdf import FPDF
+import io
+
+# Importaciones de ReportLab para un PDF profesional y estructurado
+from reportlab.lib.pagesizes import letter
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib import colors
 
 st.set_page_config(
     page_title="KashCook | Smart Kitchen",
@@ -82,7 +88,7 @@ if groq_key:
         if not tiempos or not tiendas_seleccionadas or not estilos_seleccionados:
             st.warning("⚠ Por favor selecciona al menos un tiempo, un supermercado y un estilo culinario.")
         else:
-            with st.spinner("🤖 KashCook calculando costos exactos de insumos en Alsuper y generando tu documento PDF..."):
+            with st.spinner("🤖 KashCook calculando costos exactos en Alsuper y generando documento ejecutivo con ReportLab..."):
                 prompt_text = (
                     f"Actúa como un Chef experto y asesor financiero de hogar para la app KashCook. "
                     f"Genera un plan de menús detallado con recetas y una lista de compras con costos obligatoria y detallada cotizada en **Alsuper (Chihuahua, Chih.)** para {dias} días y {personas} personas, "
@@ -92,77 +98,109 @@ if groq_key:
                     f"- Tiempos incluidos: {', '.join(tiempos)} "
                     f"- Utensilios disponibles: {', '.join(utensilios)} "
                     f"- Restricciones / Alergias: {restringidos if restringidos else 'Ninguna'} "
-                    "\nDebes estructurar tu respuesta de forma completa incluyendo dos secciones obligatorias y explícitas:"
-                    "\n1. **PLAN DE MENÚS Y RECETAS POR DÍA** (nombre del platillo, ingredientes con cantidades exactas y pasos de preparación enumerados)."
-                    "\n2. **LISTA DE COMPRAS Y COSTOS EN ALSUPER (CHIHUAHUA)** (desglose detallado de cada producto, cantidad a comprar y costo estimado en pesos mexicanos, cerrando con el costo total que no rebase los $" + str(presupuesto) + " MXN)."
+                    "\nEstructura tu respuesta de forma clara separando en dos secciones obligatorias:"
+                    "\n1. **PLAN DE MENÚS Y RECETAS POR DÍA** (nombre del platillo, ingredientes exactos y pasos de preparación enumerados)."
+                    "\n2. **LISTA DE COMPRAS Y COSTOS EN ALSUPER (CHIHUAHUA)** (desglose de producto, cantidad y costo en MXN, cerrando con el costo total que no rebase los $" + str(presupuesto) + " MXN)."
                 )
                 
                 try:
+                    # Usamos un modelo altamente capaz y estructurado de Groq
                     completion = client.chat.completions.create(
-                        model="openai/gpt-oss-20b",
+                        model="llama-3.3-70b-versatile",
                         messages=[
                             {"role": "user", "content": prompt_text}
                         ],
-                        temperature=0.7,
+                        temperature=0.6,
                     )
                     
                     content = completion.choices[0].message.content
-                    st.success("¡Tu plan culinario, cotización en Alsuper y recetas están listos! 🎉")
+                    st.success("¡Plan culinario, cotización en Alsuper y recetas listos! 🎉")
                     st.markdown("---")
                     st.markdown(content)
                     
-                    # Generación profesional de PDF con control total de multi_cell
-                    pdf = FPDF(orientation='P', unit='mm', format='A4')
-                    pdf.set_auto_page_break(auto=True, margin=15)
-                    pdf.add_page()
-                    
-                    # Encabezado formal del reporte institucional
-                    pdf.set_font('helvetica', 'B', 15)
-                    pdf.cell(0, 8, 'KashCook - Plan de Compras, Recetas y Presupuesto', 0, 1, 'C')
-                    pdf.set_font('helvetica', 'I', 10)
-                    pdf.cell(0, 6, 'Cotizacion Oficial en Alsuper (Chihuahua, Chih.) | Reporte Inteligente', 0, 1, 'C')
-                    pdf.ln(4)
-                    pdf.set_draw_color(180, 180, 180)
-                    pdf.line(10, pdf.get_y(), 200, pdf.get_y())
-                    pdf.ln(6)
-                    
-                    # Limpieza radical de caracteres especiales problemáticos (espacios de no separación, flechas, etc.)
-                    sanitized_content = (
-                        content.replace('\u202f', ' ')
-                               .replace('\xa0', ' ')
-                               .replace('–', '-')
-                               .replace('—', '-')
+                    # Generación del PDF con ReportLab (Estructura robusta)
+                    pdf_buffer = io.BytesIO()
+                    doc = SimpleDocTemplate(
+                        pdf_buffer,
+                        pagesize=letter,
+                        rightMargin=36,
+                        leftMargin=36,
+                        topMargin=36,
+                        bottomMargin=36
                     )
                     
-                    pdf.set_font('helvetica', '', 10)
+                    styles = getSampleStyleSheet()
                     
-                    for raw_line in sanitized_content.split('\n'):
-                        clean_line = raw_line.replace('*', '').replace('#', '').strip()
+                    # Estilos profesionales personalizados
+                    title_style = ParagraphStyle(
+                        'ReportTitle',
+                        parent=styles['Heading1'],
+                        fontName='Helvetica-Bold',
+                        fontSize=16,
+                        leading=20,
+                        alignment=1, # Centrado
+                        textColor=colors.HexColor('#1B3B6F')
+                    )
+                    
+                    subtitle_style = ParagraphStyle(
+                        'ReportSubtitle',
+                        parent=styles['Normal'],
+                        fontName='Helvetica-Oblique',
+                        fontSize=10,
+                        leading=14,
+                        alignment=1,
+                        textColor=colors.HexColor('#6D7275')
+                    )
+                    
+                    section_style = ParagraphStyle(
+                        'SectionHeader',
+                        parent=styles['Heading2'],
+                        fontName='Helvetica-Bold',
+                        fontSize=12,
+                        leading=16,
+                        textColor=colors.HexColor('#065A82'),
+                        spaceBefore=12,
+                        spaceAfter=6
+                    )
+                    
+                    body_style = ParagraphStyle(
+                        'ReportBody',
+                        parent=styles['Normal'],
+                        fontName='Helvetica',
+                        fontSize=9.5,
+                        leading=13,
+                        textColor=colors.HexColor('#212529'),
+                        spaceAfter=4
+                    )
+                    
+                    story = []
+                    
+                    # Encabezado del documento
+                    story.append(Paragraph("KashCook - Plan de Compras, Recetas y Presupuesto", title_style))
+                    story.append(Paragraph("Cotización Oficial en Alsuper (Chihuahua, Chih.) | Reporte Inteligente", subtitle_style))
+                    story.append(Spacer(1, 10))
+                    story.append(HRFlowable(width="100%", thickness=1, color=colors.HexColor('#CCCCCC'), spaceAfter=15))
+                    
+                    # Procesamiento y adición de contenido al PDF
+                    for raw_line in content.split('\n'):
+                        clean_line = raw_line.replace('*', '').strip()
                         
                         if not clean_line:
-                            pdf.ln(3)
+                            story.append(Spacer(1, 6))
                             continue
                         
-                        # Detectar títulos de sección o días para estilizarlos
                         upper_line = clean_line.upper()
-                        is_section_header = any(keyword in upper_line for keyword in ["DIA", "DÍA", "LISTA DE COMPRAS", "PLAN DE MENUS", "COSTOS", "PRESUPUESTO"])
+                        is_header = any(keyword in upper_line for keyword in ["DIA", "DÍA", "LISTA DE COMPRAS", "PLAN DE MENUS", "COSTOS", "PRESUPUESTO"])
                         
-                        if is_section_header and len(clean_line) < 60:
-                            pdf.ln(4)
-                            pdf.set_font('helvetica', 'B', 11)
-                            pdf.set_text_color(20, 80, 120)
-                            pdf.multi_cell(0, 6, clean_line)
-                            pdf.set_font('helvetica', '', 10)
-                            pdf.set_text_color(0, 0, 0)
+                        if is_header and len(clean_line) < 60:
+                            story.append(Paragraph(clean_line, section_style))
                         else:
-                            pdf.multi_cell(0, 5, clean_line)
+                            # Reemplazamos caracteres especiales para evitar errores de codificación
+                            safe_line = clean_line.replace('&', '&').replace('<', '<').replace('>', '>')
+                            story.append(Paragraph(safe_line, body_style))
                     
-                    # Codificación final segura a bytes estándar
-                    pdf_output = pdf.output(dest='S')
-                    if isinstance(pdf_output, str):
-                        pdf_bytes = pdf_output.encode('latin-1', 'ignore')
-                    else:
-                        pdf_bytes = bytes(pdf_output)
+                    doc.build(story)
+                    pdf_bytes = pdf_buffer.getvalue()
 
                     st.download_button(
                         label="📄 Descargar Recetas, Lista de Alsuper y Presupuesto en PDF",
