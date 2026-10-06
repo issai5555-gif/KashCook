@@ -1,5 +1,7 @@
 import io
 import re
+import json
+import html
 import requests
 from bs4 import BeautifulSoup
 
@@ -11,7 +13,6 @@ from reportlab.lib.pagesizes import letter
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.platypus import (
     HRFlowable,
-    KeepTogether,
     PageBreak,
     Paragraph,
     SimpleDocTemplate,
@@ -65,179 +66,121 @@ HEADERS = {
 # ============================================================
 # CATÁLOGO INTERNO ALSUPER
 #
-# KashCook usa estos productos como referencia interna.
+# Estos productos se consultan internamente.
 # NO se muestran como catálogo al usuario.
-#
-# Las páginas son productos reales publicados por Alsuper.
 # ============================================================
 
 PRODUCTOS_ALSUPER = [
 
-    # -------------------------
+    # --------------------------------------------------------
     # POLLO
-    # -------------------------
+    # --------------------------------------------------------
 
     {
         "categoria": "Pollo",
-        "url": (
-            "https://alsuper.com/producto/"
-            "caderita-de-pollo-44400"
-        ),
+        "url": "https://alsuper.com/producto/caderita-de-pollo-44400",
     },
 
     {
         "categoria": "Pollo",
-        "url": (
-            "https://alsuper.com/producto/"
-            "ala-de-pollo-premium-352077"
-        ),
+        "url": "https://alsuper.com/producto/ala-de-pollo-premium-352077",
     },
 
 
-    # -------------------------
+    # --------------------------------------------------------
     # RES
-    # -------------------------
+    # --------------------------------------------------------
 
     {
         "categoria": "Res",
-        "url": (
-            "https://alsuper.com/producto/"
-            "pata-de-res-9216"
-        ),
+        "url": "https://alsuper.com/producto/pata-de-res-9216",
     },
 
     {
         "categoria": "Res",
-        "url": (
-            "https://alsuper.com/producto/"
-            "puchero-de-res-14038"
-        ),
+        "url": "https://alsuper.com/producto/puchero-de-res-14038",
     },
 
     {
         "categoria": "Res",
-        "url": (
-            "https://alsuper.com/producto/"
-            "carne-para-jugo-421810"
-        ),
+        "url": "https://alsuper.com/producto/carne-para-jugo-421810",
     },
 
     {
         "categoria": "Res",
-        "url": (
-            "https://alsuper.com/producto/"
-            "sabana-de-res-497606"
-        ),
+        "url": "https://alsuper.com/producto/sabana-de-res-497606",
     },
 
 
-    # -------------------------
+    # --------------------------------------------------------
     # PUERCO
-    # -------------------------
+    # --------------------------------------------------------
 
     {
         "categoria": "Puerco",
-        "url": (
-            "https://alsuper.com/producto/"
-            "filete-de-cerdo-371873"
-        ),
+        "url": "https://alsuper.com/producto/filete-de-cerdo-371873",
     },
 
     {
         "categoria": "Puerco",
-        "url": (
-            "https://alsuper.com/producto/"
-            "molida-de-puerco-13817"
-        ),
+        "url": "https://alsuper.com/producto/molida-de-puerco-13817",
     },
 
     {
         "categoria": "Puerco",
-        "url": (
-            "https://alsuper.com/producto/"
-            "milanesa-de-puerco-3405"
-        ),
+        "url": "https://alsuper.com/producto/milanesa-de-puerco-3405",
     },
 
     {
         "categoria": "Puerco",
-        "url": (
-            "https://alsuper.com/producto/"
-            "carne-de-cerdo-para-disco-406195"
-        ),
+        "url": "https://alsuper.com/producto/carne-de-cerdo-para-disco-406195",
     },
 
 
-    # -------------------------
+    # --------------------------------------------------------
     # PESCADO
-    # -------------------------
+    # --------------------------------------------------------
 
     {
         "categoria": "Pescado",
-        "url": (
-            "https://alsuper.com/producto/"
-            "pescado-rodajeado-391892"
-        ),
+        "url": "https://alsuper.com/producto/pescado-rodajeado-391892",
     },
 
     {
         "categoria": "Pescado",
-        "url": (
-            "https://alsuper.com/producto/"
-            "filete-de-bagre-basa-3834"
-        ),
+        "url": "https://alsuper.com/producto/filete-de-bagre-basa-3834",
     },
 
     {
         "categoria": "Pescado",
-        "url": (
-            "https://alsuper.com/producto/"
-            "filete-de-pescado-finas-hierbas-369673"
-        ),
+        "url": "https://alsuper.com/producto/filete-de-pescado-finas-hierbas-369673",
     },
 
     {
         "categoria": "Pescado",
-        "url": (
-            "https://alsuper.com/producto/"
-            "filete-de-pescado-pimienta-limon-352746"
-        ),
+        "url": "https://alsuper.com/producto/filete-de-pescado-pimienta-limon-352746",
     },
 
 
-    # -------------------------
+    # --------------------------------------------------------
     # HUEVO
-    # -------------------------
+    # --------------------------------------------------------
 
     {
         "categoria": "Huevo",
-        "url": (
-            "https://alsuper.com/producto/"
-            "huevo-blanco-12-piezas-655"
-        ),
-    },
-
-
-    # -------------------------
-    # ATÚN
-    # -------------------------
-
-    {
-        "categoria": "Atún",
-        "url": (
-            "https://alsuper.com/producto/"
-            "atun"
-        ),
+        "url": "https://alsuper.com/producto/huevo-blanco-12-piezas-655",
     },
 ]
 
 
 # ============================================================
-# DESPENSA Y VEGETALES
+# PRODUCTOS DE DESPENSA
+#
+# Se mantienen como términos de apoyo para Groq.
+# No se presentan como catálogo.
 # ============================================================
 
 PRODUCTOS_DESPENSA = [
-
     "arroz",
     "frijol",
     "tortilla",
@@ -286,7 +229,7 @@ def obtener_pagina(url):
 
 
 # ============================================================
-# EXTRAER PRECIO
+# CONVERTIR PRECIO
 # ============================================================
 
 def convertir_precio(valor):
@@ -301,6 +244,7 @@ def convertir_precio(valor):
         .replace("$", "")
         .replace(",", "")
         .replace("MXN", "")
+        .replace("mxn", "")
         .strip()
     )
 
@@ -314,9 +258,7 @@ def convertir_precio(valor):
 
     try:
 
-        precio = float(
-            match.group(1)
-        )
+        precio = float(match.group(1))
 
         if 0 < precio < 10000:
             return precio
@@ -328,7 +270,7 @@ def convertir_precio(valor):
 
 
 # ============================================================
-# EXTRAER PRODUCTO
+# EXTRAER PRODUCTO ALSUPER
 # ============================================================
 
 def extraer_producto_alsuper(
@@ -336,15 +278,13 @@ def extraer_producto_alsuper(
     categoria,
 ):
 
-    html = obtener_pagina(
-        url
-    )
+    html_pagina = obtener_pagina(url)
 
-    if not html:
+    if not html_pagina:
         return None
 
     soup = BeautifulSoup(
-        html,
+        html_pagina,
         "html.parser",
     )
 
@@ -357,9 +297,9 @@ def extraer_producto_alsuper(
     }
 
 
-    # ========================================================
+    # --------------------------------------------------------
     # NOMBRE
-    # ========================================================
+    # --------------------------------------------------------
 
     h1 = soup.find("h1")
 
@@ -386,9 +326,9 @@ def extraer_producto_alsuper(
             )
 
 
-    # ========================================================
+    # --------------------------------------------------------
     # DESCRIPCIÓN
-    # ========================================================
+    # --------------------------------------------------------
 
     meta_description = soup.find(
         "meta",
@@ -417,9 +357,9 @@ def extraer_producto_alsuper(
         producto["descripcion"] = texto[:300]
 
 
-    # ========================================================
+    # --------------------------------------------------------
     # PRECIOS
-    # ========================================================
+    # --------------------------------------------------------
 
     precios = []
 
@@ -449,14 +389,10 @@ def extraer_producto_alsuper(
 
             for valor in encontrados:
 
-                precio = convertir_precio(
-                    valor
-                )
+                precio = convertir_precio(valor)
 
                 if precio:
-                    precios.append(
-                        precio
-                    )
+                    precios.append(precio)
 
         except Exception:
             pass
@@ -476,13 +412,12 @@ def extraer_producto_alsuper(
         )
 
         if precio:
-
-            precios.append(
-                precio
-            )
+            precios.append(precio)
 
 
-    # Texto
+    # --------------------------------------------------------
+    # TEXTO VISIBLE
+    # --------------------------------------------------------
 
     texto = soup.get_text(
         " ",
@@ -496,15 +431,10 @@ def extraer_producto_alsuper(
 
     for valor in encontrados:
 
-        precio = convertir_precio(
-            valor
-        )
+        precio = convertir_precio(valor)
 
         if precio:
-
-            precios.append(
-                precio
-            )
+            precios.append(precio)
 
 
     precios_validos = [
@@ -516,14 +446,34 @@ def extraer_producto_alsuper(
 
     if precios_validos:
 
-        producto["precio"] = (
-            precios_validos[0]
-        )
+        producto["precio"] = precios_validos[0]
 
 
-    # ========================================================
+    # --------------------------------------------------------
+    # LIMPIEZA
+    # --------------------------------------------------------
+
+    if producto["nombre"]:
+
+        producto["nombre"] = re.sub(
+            r"\s+",
+            " ",
+            producto["nombre"],
+        ).strip()
+
+
+    if producto["descripcion"]:
+
+        producto["descripcion"] = re.sub(
+            r"\s+",
+            " ",
+            producto["descripcion"],
+        ).strip()
+
+
+    # --------------------------------------------------------
     # VALIDACIÓN
-    # ========================================================
+    # --------------------------------------------------------
 
     if not producto["nombre"]:
         return None
@@ -547,13 +497,9 @@ def crear_catalogo_alsuper():
         text="Consultando productos de Alsuper...",
     )
 
-    total = len(
-        PRODUCTOS_ALSUPER
-    )
+    total = len(PRODUCTOS_ALSUPER)
 
-    for i, item in enumerate(
-        PRODUCTOS_ALSUPER
-    ):
+    for i, item in enumerate(PRODUCTOS_ALSUPER):
 
         producto = extraer_producto_alsuper(
             item["url"],
@@ -562,9 +508,7 @@ def crear_catalogo_alsuper():
 
         if producto:
 
-            catalogo.append(
-                producto
-            )
+            catalogo.append(producto)
 
         progreso.progress(
             int(
@@ -579,7 +523,9 @@ def crear_catalogo_alsuper():
     progreso.empty()
 
 
-    # Eliminar duplicados
+    # --------------------------------------------------------
+    # ELIMINAR DUPLICADOS
+    # --------------------------------------------------------
 
     resultado = []
 
@@ -596,13 +542,9 @@ def crear_catalogo_alsuper():
         if clave in vistos:
             continue
 
-        vistos.add(
-            clave
-        )
+        vistos.add(clave)
 
-        resultado.append(
-            producto
-        )
+        resultado.append(producto)
 
     return resultado
 
@@ -841,6 +783,110 @@ tiempos = [
 
 
 # ============================================================
+# FUNCIONES AUXILIARES
+# ============================================================
+
+def limpiar_json_de_groq(texto):
+
+    """
+    Extrae un objeto JSON aunque Groq lo envuelva
+    accidentalmente en markdown.
+    """
+
+    if not texto:
+        return None
+
+    texto = texto.strip()
+
+    texto = re.sub(
+        r"^```json\s*",
+        "",
+        texto,
+        flags=re.IGNORECASE,
+    )
+
+    texto = re.sub(
+        r"^```\s*",
+        "",
+        texto,
+    )
+
+    texto = re.sub(
+        r"\s*```$",
+        "",
+        texto,
+    )
+
+    inicio = texto.find("{")
+    final = texto.rfind("}")
+
+    if inicio == -1 or final == -1:
+        return None
+
+    texto = texto[inicio:final + 1]
+
+    try:
+        return json.loads(texto)
+
+    except Exception:
+
+        # Segundo intento:
+        # quitar caracteres de control
+
+        texto_limpio = re.sub(
+            r"[\x00-\x08\x0B\x0C\x0E-\x1F]",
+            " ",
+            texto,
+        )
+
+        try:
+            return json.loads(texto_limpio)
+
+        except Exception:
+            return None
+
+
+def numero_seguro(valor, default=0):
+
+    try:
+
+        if isinstance(valor, str):
+
+            valor = (
+                valor
+                .replace("$", "")
+                .replace(",", "")
+                .strip()
+            )
+
+        return float(valor)
+
+    except Exception:
+
+        return float(default)
+
+
+def escapar_pdf(texto):
+
+    if texto is None:
+        return ""
+
+    texto = str(texto)
+
+    texto = html.escape(
+        texto,
+        quote=False,
+    )
+
+    texto = texto.replace(
+        "\n",
+        "<br/>",
+    )
+
+    return texto
+
+
+# ============================================================
 # GENERACIÓN
 # ============================================================
 
@@ -848,6 +894,10 @@ if st.button(
     "🚀 Generar Plan Inteligente",
     use_container_width=True,
 ):
+
+    # --------------------------------------------------------
+    # VALIDACIONES
+    # --------------------------------------------------------
 
     if not tiempos:
 
@@ -885,9 +935,9 @@ if st.button(
         st.stop()
 
 
-    # ========================================================
+    # --------------------------------------------------------
     # OBTENER PRODUCTOS
-    # ========================================================
+    # --------------------------------------------------------
 
     catalogo = []
 
@@ -897,9 +947,7 @@ if st.button(
             "🛒 Consultando productos de Alsuper..."
         ):
 
-            catalogo = (
-                crear_catalogo_alsuper()
-            )
+            catalogo = crear_catalogo_alsuper()
 
 
     if not catalogo:
@@ -916,19 +964,17 @@ if st.button(
         st.stop()
 
 
-    # ========================================================
-    # NO MOSTRAR CATÁLOGO
-    #
-    # Los datos se utilizan internamente.
-    # ========================================================
+    # --------------------------------------------------------
+    # CATÁLOGO INTERNO
+    # --------------------------------------------------------
 
     catalogo_texto = "\n".join(
         [
             (
-                f"- Categoría: {p['categoria']} | "
-                f"Producto: {p['nombre']} | "
-                f"Descripción: {p['descripcion']} | "
-                f"Precio: ${p['precio']:.2f} MXN | "
+                f"PRODUCTO: {p['nombre']}\n"
+                f"CATEGORÍA: {p['categoria']}\n"
+                f"DESCRIPCIÓN: {p['descripcion']}\n"
+                f"PRECIO REAL CONSULTADO: ${p['precio']:.2f} MXN\n"
                 f"URL: {p['url']}"
             )
             for p in catalogo
@@ -936,18 +982,23 @@ if st.button(
     )
 
 
-    # ========================================================
+    # --------------------------------------------------------
     # PROMPT
-    # ========================================================
+    # --------------------------------------------------------
 
     prompt_text = f"""
 Eres KashCook AI.
 
-Eres chef profesional y especialista en
-planeación de comidas económicas.
+Eres chef profesional especializado en:
+- planeación de menús familiares;
+- cocina mexicana;
+- cocina norteña;
+- aprovechamiento de ingredientes;
+- alimentación económica;
+- control de presupuesto.
 
-Tu misión es crear un plan completo de alimentación
-y una lista REALISTA de compras.
+Tu trabajo es crear un PLAN COMPLETO DE COMIDAS
+y una LISTA DE COMPRAS.
 
 ========================================================
 DATOS DEL USUARIO
@@ -960,106 +1011,160 @@ Días: {dias}
 Presupuesto máximo:
 ${presupuesto:.2f} MXN
 
-Tiempos:
+Tiempos seleccionados:
 {', '.join(tiempos)}
 
-Estilos:
+Estilos culinarios:
 {', '.join(estilos_seleccionados)}
 
-Utensilios:
+Utensilios disponibles:
 {', '.join(utensilios)}
 
-Restricciones:
+Restricciones / alergias:
 {restringidos if restringidos else 'Ninguna'}
 
 
 ========================================================
-CATÁLOGO INTERNO DE PRODUCTOS
+PRODUCTOS Y PRECIOS REALES CONSULTADOS
 ========================================================
 
-Utiliza estos productos y precios como referencia.
+Los siguientes productos fueron consultados
+directamente desde páginas públicas de Alsuper.
 
-NO inventes productos.
+SOLO puedes utilizar estos productos cuando
+necesites asignar un precio.
 
 NO inventes precios.
 
 NO cambies precios.
 
+NO redondees precios.
+
 NO estimes precios.
 
-CATÁLOGO:
+NO inventes presentaciones.
+
+CATÁLOGO INTERNO:
 
 {catalogo_texto}
 
 
 ========================================================
-REGLAS DE MENÚ
+REGLAS DEL MENÚ
 ========================================================
 
-Planea exactamente {dias} días.
+Debes crear exactamente {dias} días.
 
-Cada día debe tener los tiempos seleccionados:
+Cada día debe contener EXACTAMENTE estos tiempos:
 
 {', '.join(tiempos)}
 
-NO utilices la palabra "Almuerzo".
+NO utilices "Almuerzo".
 
-VARÍA LAS PROTEÍNAS.
+Utiliza "Desayuno", "Comida" y "Cena".
 
-En comidas principales procura alternar:
+========================================================
+VARIEDAD DE PROTEÍNAS
+========================================================
+
+ES MUY IMPORTANTE:
+
+No hagas un menú basado principalmente en pollo.
+
+Debes buscar variedad real.
+
+Cuando la cantidad de días y presupuesto lo permitan,
+alterna entre:
 
 - Pollo
 - Res
 - Puerco
 - Pescado
 - Atún
+- Sardinas
 - Huevo
+- Frijoles
+- Queso
 - Otras proteínas económicas
 
-NO hagas todos los días pollo.
+Si no existe un producto específico de atún o sardina
+con precio en el catálogo, puedes utilizarlos en recetas,
+PERO NO debes inventarles un precio.
 
-No repitas el mismo platillo más de una vez
-salvo que sea necesario por presupuesto.
+No repitas el mismo platillo innecesariamente.
 
-Reutiliza ingredientes para disminuir desperdicio.
+No hagas pollo todos los días.
 
-Las recetas deben ser realistas para una familia.
+========================================================
+APROVECHAMIENTO
+========================================================
 
-Utiliza solamente los utensilios disponibles.
+Diseña el menú para reutilizar ingredientes.
 
+Ejemplo:
+
+Si se compra cebolla para una comida,
+puede utilizarse posteriormente.
+
+Evita comprar ingredientes que solamente
+se utilizan una vez cuando exista una alternativa.
+
+========================================================
+RECETAS
+========================================================
+
+Cada receta debe estar COMPLETA.
+
+Para cada platillo incluye:
+
+- nombre;
+- ingredientes;
+- cantidades;
+- preparación paso a paso.
+
+La preparación debe ser suficientemente detallada
+para que una persona pueda cocinarla sin tener
+que preguntarte qué hacer después.
+
+NO resumas.
+
+NO pongas "preparar como de costumbre".
+
+NO pongas "cocinar hasta que esté listo".
+
+Explica el proceso.
 
 ========================================================
 LISTA DE COMPRAS
 ========================================================
 
-La lista debe contener ÚNICAMENTE los productos
-que realmente se necesitan comprar para preparar
+La lista de compras debe incluir ÚNICAMENTE
+los ingredientes realmente necesarios para
 todo el menú.
 
-NO pongas una lista genérica.
+NO generes un catálogo.
+
+NO muestres productos que no se utilicen.
 
 Para cada producto indica:
 
-Producto
-Descripción / presentación
-Cantidad
-Precio unitario
-Total
+- producto;
+- descripción / presentación;
+- cantidad;
+- precio unitario;
+- total.
 
-Ejemplo:
+MUY IMPORTANTE:
 
-| Producto | Descripción | Cantidad | Precio unitario | Total |
-| Pollo | Caderita 1 kg | 1 kg | $44.90 | $44.90 |
+Si un producto tiene precio real en el catálogo,
+utiliza exactamente ese precio.
 
-La descripción debe corresponder al producto
-del catálogo.
+Si no tiene precio real disponible,
+escribe:
 
-No inventes presentaciones.
+"PRECIO NO DISPONIBLE"
 
-Si un producto no está disponible en el catálogo:
-
-PRECIO NO DISPONIBLE
-
+No inventes el precio.
 
 ========================================================
 PRESUPUESTO
@@ -1067,107 +1172,172 @@ PRESUPUESTO
 
 Calcula:
 
-Presupuesto máximo
-Total de compras
-Dinero restante
-Costo por día
-Costo por persona
+- presupuesto máximo;
+- total de compras con precios disponibles;
+- dinero restante;
+- costo por día;
+- costo por persona.
 
-
-========================================================
-FORMATO OBLIGATORIO
-========================================================
-
-# DÍA 1
-
-## DESAYUNO
-Nombre del platillo
-
-Ingredientes:
-- ingrediente
-- ingrediente
-
-Preparación:
-Explicación completa paso a paso.
-
-
-## COMIDA
-Nombre del platillo
-
-Ingredientes:
-- ingrediente
-- ingrediente
-
-Preparación:
-Explicación completa.
-
-
-## CENA
-Nombre del platillo
-
-Ingredientes:
-- ingrediente
-- ingrediente
-
-Preparación:
-Explicación completa.
-
-
-# DÍA 2
-
-Mismo formato.
-
-
-Continúa hasta el DÍA {dias}.
-
-
-# LISTA DE COMPRAS
-
-| Producto | Descripción / Presentación | Cantidad | Precio unitario | Total |
-
-
-# RESUMEN DEL PRESUPUESTO
-
-Presupuesto máximo:
-Total de compras:
-Dinero restante:
-Costo por día:
-Costo por persona:
-
-
-# APROVECHAMIENTO
-
-Explica cómo aprovechar los ingredientes
-sobrantes para evitar desperdicio.
-
-
-# NOTA SOBRE PRECIOS
-
-Indica que los precios corresponden a productos
-consultados en el catálogo público de Alsuper
-y pueden cambiar por promociones, existencias,
-zona y fecha de compra.
-
+Si existen productos sin precio,
+indica claramente que el total es parcial.
 
 ========================================================
-IMPORTANTE
+FORMATO DE RESPUESTA
 ========================================================
 
-Las recetas deben estar COMPLETAS.
+RESPONDE EXCLUSIVAMENTE CON JSON VÁLIDO.
 
-No reduzcas las instrucciones.
+NO uses Markdown.
 
-No resumas las preparaciones.
+NO uses ```.
 
-No omitas ingredientes importantes.
+NO agregues texto antes o después del JSON.
 
-Cada día debe estar claramente separado.
+Usa exactamente esta estructura:
+
+{{
+  "dias": [
+    {{
+      "dia": 1,
+      "comidas": [
+        {{
+          "tipo": "Desayuno",
+          "nombre": "Nombre del platillo",
+          "ingredientes": [
+            "cantidad ingrediente",
+            "cantidad ingrediente"
+          ],
+          "preparacion": [
+            "Paso 1 completo.",
+            "Paso 2 completo.",
+            "Paso 3 completo."
+          ]
+        }}
+      ]
+    }}
+  ],
+  "lista_compras": [
+    {{
+      "producto": "Nombre",
+      "descripcion": "Presentación real",
+      "cantidad": 1,
+      "unidad": "kg",
+      "precio_unitario": 100.00,
+      "total": 100.00,
+      "precio_disponible": true
+    }}
+  ],
+  "presupuesto": {{
+    "maximo": {presupuesto:.2f},
+    "total_compras": 0.00,
+    "dinero_restante": 0.00,
+    "costo_por_dia": 0.00,
+    "costo_por_persona": 0.00,
+    "total_parcial": false
+  }},
+  "aprovechamiento": [
+    "Consejo de aprovechamiento 1.",
+    "Consejo de aprovechamiento 2."
+  ]
+}}
+
+========================================================
+REGLAS JSON
+========================================================
+
+Debes generar exactamente {dias} objetos dentro de
+"dias".
+
+Cada día debe contener exactamente los tiempos:
+
+{', '.join(tiempos)}
+
+Cada comida debe tener:
+
+- nombre;
+- ingredientes;
+- preparación.
+
+"ingredientes" debe ser una lista.
+
+"preparacion" debe ser una lista de pasos completos.
+
+NO pongas la receta completa en una sola cadena.
+
+La lista de compras debe contener los productos
+realmente utilizados en las recetas.
+
+La cantidad debe ser numérica.
+
+Ejemplos:
+
+1 kg:
+cantidad = 1
+unidad = "kg"
+
+2 paquetes:
+cantidad = 2
+unidad = "paquetes"
+
+12 piezas:
+cantidad = 12
+unidad = "piezas"
+
+Cuando no exista precio real:
+
+precio_unitario = null
+total = null
+precio_disponible = false
+
+Cuando exista precio real:
+
+precio_unitario debe coincidir EXACTAMENTE
+con el precio del catálogo.
+
+El total de una línea debe ser:
+
+cantidad × precio_unitario
+
+No inventes precios.
+
+No inventes presentaciones.
+
+========================================================
+RESTRICCIONES
+========================================================
+
+Nunca utilices alimentos prohibidos por el usuario:
+
+{restringidos if restringidos else 'NINGUNO'}
+
+Utiliza únicamente los utensilios disponibles:
+
+{', '.join(utensilios)}
+
+========================================================
+OBJETIVO
+========================================================
+
+Quiero un menú práctico, variado, económico,
+realista y cocinable.
+
+Quiero variedad de proteínas.
+
+Quiero recetas completas.
+
+Quiero una lista de compras clara.
+
+Quiero precios reales cuando estén disponibles.
+
+No quiero un catálogo visible.
+
+No inventes precios.
 """
 
 
-    # ========================================================
+    # --------------------------------------------------------
     # GROQ
-    # ========================================================
+    # --------------------------------------------------------
 
     with st.spinner(
         "🤖 KashCook está diseñando tu plan..."
@@ -1175,18 +1345,23 @@ Cada día debe estar claramente separado.
 
         try:
 
-            completion = (
-                client.chat.completions.create(
-                    model="openai/gpt-oss-120b",
-                    messages=[
-                        {
-                            "role": "user",
-                            "content": prompt_text,
-                        }
-                    ],
-                    temperature=0.15,
-                    max_tokens=12000,
-                )
+            completion = client.chat.completions.create(
+                model="openai/gpt-oss-120b",
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "Responde exclusivamente con JSON válido. "
+                            "No utilices Markdown."
+                        ),
+                    },
+                    {
+                        "role": "user",
+                        "content": prompt_text,
+                    },
+                ],
+                temperature=0.15,
+                max_tokens=16000,
             )
 
             content = (
@@ -1205,8 +1380,184 @@ Cada día debe estar claramente separado.
             st.stop()
 
 
+    # --------------------------------------------------------
+    # PARSEAR JSON
+    # --------------------------------------------------------
+
+    datos = limpiar_json_de_groq(
+        content
+    )
+
+
+    if not datos:
+
+        st.error(
+            "❌ Groq no devolvió un JSON válido."
+        )
+
+        st.code(
+            content,
+            language="text",
+        )
+
+        st.stop()
+
+
+    # --------------------------------------------------------
+    # VALIDAR DÍAS
+    # --------------------------------------------------------
+
+    dias_generados = datos.get(
+        "dias",
+        [],
+    )
+
+    if len(dias_generados) != dias:
+
+        st.error(
+            f"❌ Se solicitaron {dias} días, "
+            f"pero Groq generó {len(dias_generados)}."
+        )
+
+        st.stop()
+
+
+    # --------------------------------------------------------
+    # VALIDAR COMIDAS
+    # --------------------------------------------------------
+
+    for dia_info in dias_generados:
+
+        comidas = dia_info.get(
+            "comidas",
+            [],
+        )
+
+        tipos = [
+            str(
+                comida.get(
+                    "tipo",
+                    ""
+                )
+            ).strip().lower()
+            for comida in comidas
+        ]
+
+        esperadas = [
+            x.lower()
+            for x in tiempos
+        ]
+
+        faltantes = [
+            x
+            for x in esperadas
+            if x not in tipos
+        ]
+
+        if faltantes:
+
+            st.error(
+                f"❌ El día {dia_info.get('dia')} "
+                f"no contiene todos los tiempos "
+                f"solicitados: {', '.join(faltantes)}."
+            )
+
+            st.stop()
+
+
+    # --------------------------------------------------------
+    # VALIDAR Y RECALCULAR COMPRAS
+    # --------------------------------------------------------
+
+    lista_compras = datos.get(
+        "lista_compras",
+        [],
+    )
+
+    total_calculado = 0.0
+    hay_precios_faltantes = False
+
+    for item in lista_compras:
+
+        precio = item.get(
+            "precio_unitario"
+        )
+
+        cantidad = numero_seguro(
+            item.get(
+                "cantidad",
+                0,
+            ),
+            0,
+        )
+
+        if precio is None:
+
+            item["precio_disponible"] = False
+            item["total"] = None
+            hay_precios_faltantes = True
+
+        else:
+
+            precio = numero_seguro(
+                precio,
+                0,
+            )
+
+            item["precio_unitario"] = round(
+                precio,
+                2,
+            )
+
+            total_linea = round(
+                cantidad * precio,
+                2,
+            )
+
+            item["total"] = total_linea
+
+            total_calculado += total_linea
+
+
+    total_calculado = round(
+        total_calculado,
+        2,
+    )
+
+
+    dinero_restante = round(
+        presupuesto - total_calculado,
+        2,
+    )
+
+
+    costo_por_dia = round(
+        total_calculado / dias,
+        2,
+    ) if dias else 0
+
+
+    costo_por_persona = round(
+        total_calculado / personas,
+        2,
+    ) if personas else 0
+
+
+    datos["presupuesto"] = {
+        "maximo": round(
+            float(presupuesto),
+            2,
+        ),
+        "total_compras": total_calculado,
+        "dinero_restante": dinero_restante,
+        "costo_por_dia": costo_por_dia,
+        "costo_por_persona": costo_por_persona,
+        "total_parcial": hay_precios_faltantes,
+    }
+
+
     # ========================================================
-    # MOSTRAR RESULTADO
+    # MOSTRAR PLAN
     # ========================================================
 
     st.success(
@@ -1215,8 +1566,255 @@ Cada día debe estar claramente separado.
 
     st.markdown("---")
 
+
+    # --------------------------------------------------------
+    # MOSTRAR CADA DÍA
+    # --------------------------------------------------------
+
+    for dia_info in dias_generados:
+
+        numero_dia = dia_info.get(
+            "dia",
+            "",
+        )
+
+        st.markdown(
+            f"## 📅 DÍA {numero_dia}"
+        )
+
+        st.markdown("---")
+
+        for comida in dia_info.get(
+            "comidas",
+            [],
+        ):
+
+            tipo = comida.get(
+                "tipo",
+                "",
+            )
+
+            nombre = comida.get(
+                "nombre",
+                "Platillo",
+            )
+
+            st.markdown(
+                f"### {tipo.upper()}"
+            )
+
+            st.markdown(
+                f"**{nombre}**"
+            )
+
+            st.markdown(
+                "**Ingredientes:**"
+            )
+
+            for ingrediente in comida.get(
+                "ingredientes",
+                [],
+            ):
+
+                st.markdown(
+                    f"- {ingrediente}"
+                )
+
+            st.markdown(
+                "**Preparación:**"
+            )
+
+            pasos = comida.get(
+                "preparacion",
+                [],
+            )
+
+            for i, paso in enumerate(
+                pasos,
+                start=1,
+            ):
+
+                st.markdown(
+                    f"{i}. {paso}"
+                )
+
+            st.markdown("---")
+
+
+    # ========================================================
+    # LISTA DE COMPRAS
+    # ========================================================
+
     st.markdown(
-        content
+        "## 🛒 Lista de compras"
+    )
+
+    st.caption(
+        "Esta lista contiene únicamente los productos "
+        "que KashCook determinó necesarios para el menú."
+    )
+
+
+    filas_compras = []
+
+    for item in lista_compras:
+
+        producto = item.get(
+            "producto",
+            "",
+        )
+
+        descripcion = item.get(
+            "descripcion",
+            "",
+        )
+
+        cantidad = item.get(
+            "cantidad",
+            "",
+        )
+
+        unidad = item.get(
+            "unidad",
+            "",
+        )
+
+        precio = item.get(
+            "precio_unitario"
+        )
+
+        total = item.get(
+            "total"
+        )
+
+        if precio is None:
+
+            precio_texto = "Precio no disponible"
+
+        else:
+
+            precio_texto = (
+                f"${float(precio):,.2f}"
+            )
+
+        if total is None:
+
+            total_texto = "No disponible"
+
+        else:
+
+            total_texto = (
+                f"${float(total):,.2f}"
+            )
+
+        filas_compras.append(
+            [
+                producto,
+                descripcion,
+                f"{cantidad} {unidad}",
+                precio_texto,
+                total_texto,
+            ]
+        )
+
+
+    if filas_compras:
+
+        st.dataframe(
+            filas_compras,
+            column_config={
+                0: "Producto",
+                1: "Descripción / Presentación",
+                2: "Cantidad",
+                3: "Precio unitario",
+                4: "Total",
+            },
+            hide_index=True,
+            use_container_width=True,
+        )
+
+    else:
+
+        st.warning(
+            "No se generó una lista de compras."
+        )
+
+
+    # ========================================================
+    # RESUMEN
+    # ========================================================
+
+    st.markdown(
+        "## 💰 Resumen del presupuesto"
+    )
+
+    presupuesto_info = datos["presupuesto"]
+
+    r1, r2, r3, r4 = st.columns(4)
+
+    with r1:
+
+        st.metric(
+            "Presupuesto",
+            f"${presupuesto_info['maximo']:,.2f}",
+        )
+
+    with r2:
+
+        st.metric(
+            "Compras",
+            f"${presupuesto_info['total_compras']:,.2f}",
+        )
+
+    with r3:
+
+        st.metric(
+            "Restante",
+            f"${presupuesto_info['dinero_restante']:,.2f}",
+        )
+
+    with r4:
+
+        st.metric(
+            "Costo por día",
+            f"${presupuesto_info['costo_por_dia']:,.2f}",
+        )
+
+
+    if hay_precios_faltantes:
+
+        st.warning(
+            "⚠️ El total mostrado es PARCIAL porque "
+            "uno o más productos no tienen un precio "
+            "real disponible en el catálogo consultado."
+        )
+
+
+    # ========================================================
+    # APROVECHAMIENTO
+    # ========================================================
+
+    st.markdown(
+        "## ♻️ Aprovechamiento"
+    )
+
+    for consejo in datos.get(
+        "aprovechamiento",
+        [],
+    ):
+
+        st.markdown(
+            f"- {consejo}"
+        )
+
+
+    st.markdown("---")
+
+    st.caption(
+        "Los precios corresponden a productos "
+        "consultados en el catálogo público de Alsuper "
+        "y pueden cambiar por promociones, existencias, "
+        "zona y fecha de compra."
     )
 
 
@@ -1230,12 +1828,13 @@ Cada día debe estar claramente separado.
     doc = SimpleDocTemplate(
         pdf_buffer,
         pagesize=letter,
-        rightMargin=36,
-        leftMargin=36,
-        topMargin=40,
-        bottomMargin=40,
-        title="KashCook AI",
+        rightMargin=38,
+        leftMargin=38,
+        topMargin=42,
+        bottomMargin=42,
+        title="KashCook AI - Plan",
         author="KashCook AI",
+        allowSplitting=1,
     )
 
 
@@ -1250,8 +1849,8 @@ Cada día debe estar claramente separado.
         "KashTitle",
         parent=styles["Heading1"],
         fontName="Helvetica-Bold",
-        fontSize=18,
-        leading=22,
+        fontSize=19,
+        leading=23,
         alignment=TA_CENTER,
         textColor=colors.HexColor(
             "#1B3B6F"
@@ -1281,9 +1880,8 @@ Cada día debe estar claramente separado.
         fontSize=16,
         leading=20,
         textColor=colors.white,
-        spaceBefore=10,
-        spaceAfter=12,
         alignment=TA_CENTER,
+        spaceAfter=0,
     )
 
 
@@ -1296,8 +1894,8 @@ Cada día debe estar claramente separado.
         textColor=colors.HexColor(
             "#065A82"
         ),
-        spaceBefore=12,
-        spaceAfter=4,
+        spaceBefore=10,
+        spaceAfter=6,
     )
 
 
@@ -1310,7 +1908,21 @@ Cada día debe estar claramente separado.
         textColor=colors.HexColor(
             "#222222"
         ),
-        spaceAfter=5,
+        spaceAfter=7,
+    )
+
+
+    label_style = ParagraphStyle(
+        "Label",
+        parent=styles["Normal"],
+        fontName="Helvetica-Bold",
+        fontSize=9,
+        leading=12,
+        textColor=colors.HexColor(
+            "#333333"
+        ),
+        spaceBefore=5,
+        spaceAfter=3,
     )
 
 
@@ -1324,18 +1936,25 @@ Cada día debe estar claramente separado.
             "#222222"
         ),
         spaceAfter=5,
+        splitLongWords=True,
     )
 
 
-    small_style = ParagraphStyle(
-        "Small",
-        parent=styles["Normal"],
-        fontName="Helvetica",
-        fontSize=8,
-        leading=11,
-        textColor=colors.HexColor(
-            "#444444"
-        ),
+    ingredient_style = ParagraphStyle(
+        "Ingredient",
+        parent=body_style,
+        leftIndent=10,
+        firstLineIndent=-8,
+        spaceAfter=3,
+    )
+
+
+    step_style = ParagraphStyle(
+        "Step",
+        parent=body_style,
+        leftIndent=12,
+        firstLineIndent=-12,
+        spaceAfter=5,
     )
 
 
@@ -1377,64 +1996,19 @@ Cada día debe estar claramente separado.
 
 
     # ========================================================
-    # LIMPIAR TEXTO
-    # ========================================================
-
-    def limpiar_texto(texto):
-
-        if not isinstance(
-            texto,
-            str,
-        ):
-
-            texto = str(
-                texto
-            )
-
-        texto = texto.replace(
-            "```markdown",
-            "",
-        )
-
-        texto = texto.replace(
-            "```",
-            "",
-        )
-
-        texto = texto.replace(
-            "**",
-            "",
-        )
-
-        texto = texto.replace(
-            "__",
-            "",
-        )
-
-        texto = texto.replace(
-            "•",
-            "-",
-        )
-
-        # ReportLab interpreta & como entidad HTML.
-        texto = texto.replace(
-            "&",
-            "&amp;",
-        )
-
-        return texto.strip()
-
-
-    # ========================================================
-    # STORY PDF
+    # STORY
     # ========================================================
 
     story = []
 
 
+    # --------------------------------------------------------
+    # PORTADA / ENCABEZADO
+    # --------------------------------------------------------
+
     story.append(
         Paragraph(
-            "🍳 KASHCOOK AI",
+            "KASHCOOK AI",
             title_style,
         )
     )
@@ -1459,454 +2033,698 @@ Cada día debe estar claramente separado.
             color=colors.HexColor(
                 "#065A82"
             ),
-            spaceAfter=15,
+            spaceAfter=12,
         )
     )
 
 
     # ========================================================
-    # PARSEAR RESPUESTA PARA PDF
+    # DÍAS
     # ========================================================
 
-    lineas = content.split(
-        "\n"
-    )
+    for indice_dia, dia_info in enumerate(
+        dias_generados
+    ):
 
-    dia_actual = None
-    comida_actual = None
-    receta_buffer = []
+        # Cada día empieza en página nueva,
+        # excepto el primero.
 
-
-    def agregar_receta_buffer():
-
-        nonlocal receta_buffer
-
-        if not receta_buffer:
-            return
-
-        for texto in receta_buffer:
-
-            texto = texto.strip()
-
-            if not texto:
-                continue
+        if indice_dia > 0:
 
             story.append(
-                Paragraph(
-                    limpiar_texto(
-                        texto
-                    ),
-                    body_style,
-                )
+                PageBreak()
             )
 
-        receta_buffer = []
 
-
-    for linea in lineas:
-
-        linea = linea.strip()
-
-        if not linea:
-            continue
-
-
-        # Quitar markdown de código
-
-        if linea.startswith(
-            "```"
-        ):
-            continue
-
-
-        # ====================================================
-        # DÍA
-        # ====================================================
-
-        match_dia = re.match(
-            r"^#+\s*D[ÍI]A\s+(\d+)",
-            linea,
-            flags=re.IGNORECASE,
+        numero_dia = dia_info.get(
+            "dia",
+            indice_dia + 1,
         )
 
-        if match_dia:
 
-            agregar_receta_buffer()
+        # ----------------------------------------------------
+        # ENCABEZADO DEL DÍA
+        # ----------------------------------------------------
 
-            dia_numero = match_dia.group(
-                1
-            )
-
-            # Separación entre días
-            if dia_actual is not None:
-
-                story.append(
-                    PageBreak()
-                )
-
-            dia_actual = dia_numero
-            comida_actual = None
-
-
-            # Bloque visual del día
-
-            tabla_dia = Table(
+        tabla_dia = Table(
+            [
                 [
-                    [
-                        Paragraph(
-                            f"DÍA {dia_numero}",
-                            day_style,
-                        )
-                    ]
-                ],
-                colWidths=[
-                    540
-                ],
-            )
-
-
-            tabla_dia.setStyle(
-                TableStyle(
-                    [
-                        (
-                            "BACKGROUND",
-                            (0, 0),
-                            (-1, -1),
-                            colors.HexColor(
-                                "#065A82"
-                            ),
-                        ),
-                        (
-                            "VALIGN",
-                            (0, 0),
-                            (-1, -1),
-                            "MIDDLE",
-                        ),
-                        (
-                            "LEFTPADDING",
-                            (0, 0),
-                            (-1, -1),
-                            10,
-                        ),
-                        (
-                            "RIGHTPADDING",
-                            (0, 0),
-                            (-1, -1),
-                            10,
-                        ),
-                        (
-                            "TOPPADDING",
-                            (0, 0),
-                            (-1, -1),
-                            8,
-                        ),
-                        (
-                            "BOTTOMPADDING",
-                            (0, 0),
-                            (-1, -1),
-                            4,
-                        ),
-                    ]
-                )
-            )
-
-            story.append(
-                tabla_dia
-            )
-
-            continue
-
-
-        # ====================================================
-        # TIEMPO DE COMIDA
-        # ====================================================
-
-        match_comida = re.match(
-            r"^#+\s*(DESAYUNO|COMIDA|CENA)",
-            linea,
-            flags=re.IGNORECASE,
+                    Paragraph(
+                        f"DÍA {numero_dia}",
+                        day_style,
+                    )
+                ]
+            ],
+            colWidths=[
+                536
+            ],
         )
 
-        if match_comida:
 
-            agregar_receta_buffer()
-
-            comida_actual = (
-                match_comida
-                .group(1)
-                .upper()
+        tabla_dia.setStyle(
+            TableStyle(
+                [
+                    (
+                        "BACKGROUND",
+                        (0, 0),
+                        (-1, -1),
+                        colors.HexColor(
+                            "#065A82"
+                        ),
+                    ),
+                    (
+                        "VALIGN",
+                        (0, 0),
+                        (-1, -1),
+                        "MIDDLE",
+                    ),
+                    (
+                        "LEFTPADDING",
+                        (0, 0),
+                        (-1, -1),
+                        10,
+                    ),
+                    (
+                        "RIGHTPADDING",
+                        (0, 0),
+                        (-1, -1),
+                        10,
+                    ),
+                    (
+                        "TOPPADDING",
+                        (0, 0),
+                        (-1, -1),
+                        9,
+                    ),
+                    (
+                        "BOTTOMPADDING",
+                        (0, 0),
+                        (-1, -1),
+                        9,
+                    ),
+                ]
             )
+        )
+
+
+        story.append(
+            tabla_dia
+        )
+
+        story.append(
+            Spacer(
+                1,
+                8,
+            )
+        )
+
+
+        # ----------------------------------------------------
+        # COMIDAS
+        # ----------------------------------------------------
+
+        for comida in dia_info.get(
+            "comidas",
+            [],
+        ):
+
+            tipo = comida.get(
+                "tipo",
+                "",
+            )
+
+            nombre = comida.get(
+                "nombre",
+                "Platillo",
+            )
+
 
             story.append(
                 Paragraph(
-                    comida_actual,
+                    escapar_pdf(
+                        str(tipo).upper()
+                    ),
                     meal_style,
                 )
             )
 
-            continue
-
-
-        # ====================================================
-        # LISTA DE COMPRAS
-        # ====================================================
-
-        if re.match(
-            r"^#+\s*LISTA DE COMPRAS",
-            linea,
-            flags=re.IGNORECASE,
-        ):
-
-            agregar_receta_buffer()
-
-            story.append(
-                Spacer(
-                    1,
-                    12,
-                )
-            )
 
             story.append(
                 Paragraph(
-                    "LISTA DE COMPRAS",
-                    section_style,
-                )
-            )
-
-            continue
-
-
-        # ====================================================
-        # RESUMEN
-        # ====================================================
-
-        if re.match(
-            r"^#+\s*RESUMEN DEL PRESUPUESTO",
-            linea,
-            flags=re.IGNORECASE,
-        ):
-
-            agregar_receta_buffer()
-
-            story.append(
-                Spacer(
-                    1,
-                    12,
-                )
-            )
-
-            story.append(
-                Paragraph(
-                    "RESUMEN DEL PRESUPUESTO",
-                    section_style,
-                )
-            )
-
-            continue
-
-
-        # ====================================================
-        # APROVECHAMIENTO
-        # ====================================================
-
-        if re.match(
-            r"^#+\s*APROVECHAMIENTO",
-            linea,
-            flags=re.IGNORECASE,
-        ):
-
-            agregar_receta_buffer()
-
-            story.append(
-                Spacer(
-                    1,
-                    12,
-                )
-            )
-
-            story.append(
-                Paragraph(
-                    "APROVECHAMIENTO",
-                    section_style,
-                )
-            )
-
-            continue
-
-
-        # ====================================================
-        # TÍTULOS INTERNOS
-        # ====================================================
-
-        if linea.startswith(
-            "###"
-        ):
-
-            agregar_receta_buffer()
-
-            texto = re.sub(
-                r"^#+\s*",
-                "",
-                linea,
-            )
-
-            story.append(
-                Paragraph(
-                    limpiar_texto(
-                        texto
-                    ),
+                    escapar_pdf(nombre),
                     dish_style,
                 )
             )
 
-            continue
+
+            story.append(
+                Paragraph(
+                    "INGREDIENTES",
+                    label_style,
+                )
+            )
 
 
-        # ====================================================
-        # TABLA
-        # ====================================================
-
-        if "|" in linea:
-
-            agregar_receta_buffer()
-
-            partes = [
-                x.strip()
-                for x in linea.split("|")
-            ]
-
-            partes = [
-                x
-                for x in partes
-                if x
-            ]
-
-            if not partes:
-                continue
+            ingredientes = comida.get(
+                "ingredientes",
+                [],
+            )
 
 
-            # Separador Markdown
+            for ingrediente in ingredientes:
 
-            if all(
-                set(
-                    x.replace(
-                        " ",
-                        "",
-                    )
-                ) <= {
-                    "-",
-                    ":",
-                }
-                for x in partes
-            ):
-                continue
-
-
-            # Crear tabla de compras
-
-            if len(partes) >= 4:
-
-                fila = [
+                story.append(
                     Paragraph(
-                        limpiar_texto(x),
-                        table_body_style,
+                        "• "
+                        + escapar_pdf(
+                            ingrediente
+                        ),
+                        ingredient_style,
                     )
-                    for x in partes[:5]
-                ]
+                )
 
-                if len(fila) == 5:
-
-                    # Guardamos temporalmente
-                    # como tabla individual.
-                    tabla = Table(
-                        [fila],
-                        colWidths=[
-                            90,
-                            170,
-                            75,
-                            85,
-                            80,
-                        ],
-                    )
-
-                    tabla.setStyle(
-                        TableStyle(
-                            [
-                                (
-                                    "GRID",
-                                    (0, 0),
-                                    (-1, -1),
-                                    0.4,
-                                    colors.HexColor(
-                                        "#CCCCCC"
-                                    ),
-                                ),
-                                (
-                                    "VALIGN",
-                                    (0, 0),
-                                    (-1, -1),
-                                    "TOP",
-                                ),
-                                (
-                                    "TOPPADDING",
-                                    (0, 0),
-                                    (-1, -1),
-                                    4,
-                                ),
-                                (
-                                    "BOTTOMPADDING",
-                                    (0, 0),
-                                    (-1, -1),
-                                    4,
-                                ),
-                            ]
-                        )
-                    )
-
-                    story.append(
-                        tabla
-                    )
-
-                continue
-
-
-        # ====================================================
-        # NEGRITAS / LABELS
-        # ====================================================
-
-        if (
-            linea.startswith(
-                "Ingredientes:"
-            )
-            or linea.startswith(
-                "Preparación:"
-            )
-        ):
-
-            agregar_receta_buffer()
 
             story.append(
                 Paragraph(
-                    limpiar_texto(
-                        linea
-                    ),
-                    dish_style,
+                    "PREPARACIÓN",
+                    label_style,
                 )
             )
 
-            continue
+
+            preparacion = comida.get(
+                "preparacion",
+                [],
+            )
 
 
-        # ====================================================
-        # TEXTO NORMAL
-        # ====================================================
+            for numero_paso, paso in enumerate(
+                preparacion,
+                start=1,
+            ):
 
-        receta_buffer.append(
-            linea
+                story.append(
+                    Paragraph(
+                        (
+                            f"{numero_paso}. "
+                            f"{escapar_pdf(paso)}"
+                        ),
+                        step_style,
+                    )
+                )
+
+
+            story.append(
+                Spacer(
+                    1,
+                    7,
+                )
+            )
+
+            story.append(
+                HRFlowable(
+                    width="100%",
+                    thickness=0.5,
+                    color=colors.HexColor(
+                        "#D5D5D5"
+                    ),
+                    spaceBefore=2,
+                    spaceAfter=5,
+                )
+            )
+
+
+    # ========================================================
+    # LISTA DE COMPRAS PDF
+    # ========================================================
+
+    story.append(
+        PageBreak()
+    )
+
+
+    story.append(
+        Paragraph(
+            "LISTA DE COMPRAS",
+            section_style,
+        )
+    )
+
+
+    story.append(
+        Paragraph(
+            (
+                "Productos necesarios para preparar "
+                "el menú completo."
+            ),
+            body_style,
+        )
+    )
+
+
+    encabezado = [
+        Paragraph(
+            "Producto",
+            table_header_style,
+        ),
+        Paragraph(
+            "Descripción / Presentación",
+            table_header_style,
+        ),
+        Paragraph(
+            "Cantidad",
+            table_header_style,
+        ),
+        Paragraph(
+            "Precio unitario",
+            table_header_style,
+        ),
+        Paragraph(
+            "Total",
+            table_header_style,
+        ),
+    ]
+
+
+    tabla_compras = [
+        encabezado
+    ]
+
+
+    for item in lista_compras:
+
+        producto = escapar_pdf(
+            item.get(
+                "producto",
+                "",
+            )
+        )
+
+        descripcion = escapar_pdf(
+            item.get(
+                "descripcion",
+                "",
+            )
+        )
+
+        cantidad = item.get(
+            "cantidad",
+            "",
+        )
+
+        unidad = escapar_pdf(
+            item.get(
+                "unidad",
+                "",
+            )
+        )
+
+        precio = item.get(
+            "precio_unitario"
+        )
+
+        total = item.get(
+            "total"
         )
 
 
-    agregar_receta_buffer()
+        if precio is None:
+
+            precio_texto = (
+                "No disponible"
+            )
+
+        else:
+
+            precio_texto = (
+                f"${float(precio):,.2f}"
+            )
+
+
+        if total is None:
+
+            total_texto = (
+                "No disponible"
+            )
+
+        else:
+
+            total_texto = (
+                f"${float(total):,.2f}"
+            )
+
+
+        tabla_compras.append(
+            [
+                Paragraph(
+                    producto,
+                    table_body_style,
+                ),
+                Paragraph(
+                    descripcion,
+                    table_body_style,
+                ),
+                Paragraph(
+                    f"{cantidad} {unidad}",
+                    table_body_style,
+                ),
+                Paragraph(
+                    precio_texto,
+                    table_body_style,
+                ),
+                Paragraph(
+                    total_texto,
+                    table_body_style,
+                ),
+            ]
+        )
+
+
+    if len(tabla_compras) > 1:
+
+        tabla = Table(
+            tabla_compras,
+            colWidths=[
+                105,
+                170,
+                70,
+                90,
+                80,
+            ],
+            repeatRows=1,
+        )
+
+
+        tabla.setStyle(
+            TableStyle(
+                [
+                    (
+                        "BACKGROUND",
+                        (0, 0),
+                        (-1, 0),
+                        colors.HexColor(
+                            "#065A82"
+                        ),
+                    ),
+                    (
+                        "GRID",
+                        (0, 0),
+                        (-1, -1),
+                        0.4,
+                        colors.HexColor(
+                            "#CCCCCC"
+                        ),
+                    ),
+                    (
+                        "VALIGN",
+                        (0, 0),
+                        (-1, -1),
+                        "TOP",
+                    ),
+                    (
+                        "LEFTPADDING",
+                        (0, 0),
+                        (-1, -1),
+                        5,
+                    ),
+                    (
+                        "RIGHTPADDING",
+                        (0, 0),
+                        (-1, -1),
+                        5,
+                    ),
+                    (
+                        "TOPPADDING",
+                        (0, 0),
+                        (-1, -1),
+                        5,
+                    ),
+                    (
+                        "BOTTOMPADDING",
+                        (0, 0),
+                        (-1, -1),
+                        5,
+                    ),
+                ]
+            )
+        )
+
+
+        story.append(
+            tabla
+        )
+
+
+    else:
+
+        story.append(
+            Paragraph(
+                "No se generaron productos.",
+                body_style,
+            )
+        )
+
+
+    # ========================================================
+    # RESUMEN PDF
+    # ========================================================
+
+    story.append(
+        Spacer(
+            1,
+            12,
+        )
+    )
+
+
+    story.append(
+        Paragraph(
+            "RESUMEN DEL PRESUPUESTO",
+            section_style,
+        )
+    )
+
+
+    resumen = datos["presupuesto"]
+
+
+    resumen_data = [
+        [
+            Paragraph(
+                "Presupuesto máximo",
+                table_body_style,
+            ),
+            Paragraph(
+                f"${resumen['maximo']:,.2f} MXN",
+                table_body_style,
+            ),
+        ],
+        [
+            Paragraph(
+                "Total de compras",
+                table_body_style,
+            ),
+            Paragraph(
+                f"${resumen['total_compras']:,.2f} MXN",
+                table_body_style,
+            ),
+        ],
+        [
+            Paragraph(
+                "Dinero restante",
+                table_body_style,
+            ),
+            Paragraph(
+                f"${resumen['dinero_restante']:,.2f} MXN",
+                table_body_style,
+            ),
+        ],
+        [
+            Paragraph(
+                "Costo por día",
+                table_body_style,
+            ),
+            Paragraph(
+                f"${resumen['costo_por_dia']:,.2f} MXN",
+                table_body_style,
+            ),
+        ],
+        [
+            Paragraph(
+                "Costo por persona",
+                table_body_style,
+            ),
+            Paragraph(
+                f"${resumen['costo_por_persona']:,.2f} MXN",
+                table_body_style,
+            ),
+        ],
+    ]
+
+
+    tabla_resumen = Table(
+        resumen_data,
+        colWidths=[
+            250,
+            266,
+        ],
+    )
+
+
+    tabla_resumen.setStyle(
+        TableStyle(
+            [
+                (
+                    "GRID",
+                    (0, 0),
+                    (-1, -1),
+                    0.4,
+                    colors.HexColor(
+                        "#CCCCCC"
+                    ),
+                ),
+                (
+                    "VALIGN",
+                    (0, 0),
+                    (-1, -1),
+                    "MIDDLE",
+                ),
+                (
+                    "BACKGROUND",
+                    (0, 0),
+                    (0, -1),
+                    colors.HexColor(
+                        "#F2F5F8"
+                    ),
+                ),
+                (
+                    "LEFTPADDING",
+                    (0, 0),
+                    (-1, -1),
+                    7,
+                ),
+                (
+                    "RIGHTPADDING",
+                    (0, 0),
+                    (-1, -1),
+                    7,
+                ),
+                (
+                    "TOPPADDING",
+                    (0, 0),
+                    (-1, -1),
+                    6,
+                ),
+                (
+                    "BOTTOMPADDING",
+                    (0, 0),
+                    (-1, -1),
+                    6,
+                ),
+            ]
+        )
+    )
+
+
+    story.append(
+        tabla_resumen
+    )
+
+
+    # ========================================================
+    # APROVECHAMIENTO PDF
+    # ========================================================
+
+    story.append(
+        Spacer(
+            1,
+            12,
+        )
+    )
+
+
+    story.append(
+        Paragraph(
+            "APROVECHAMIENTO",
+            section_style,
+        )
+    )
+
+
+    for consejo in datos.get(
+        "aprovechamiento",
+        [],
+    ):
+
+        story.append(
+            Paragraph(
+                "• "
+                + escapar_pdf(
+                    consejo
+                ),
+                body_style,
+            )
+        )
+
+
+    # ========================================================
+    # NOTA DE PRECIOS
+    # ========================================================
+
+    story.append(
+        Spacer(
+            1,
+            10,
+        )
+    )
+
+
+    story.append(
+        HRFlowable(
+            width="100%",
+            thickness=0.5,
+            color=colors.HexColor(
+                "#CCCCCC"
+            ),
+            spaceBefore=3,
+            spaceAfter=7,
+        )
+    )
+
+
+    story.append(
+        Paragraph(
+            (
+                "NOTA: Los precios corresponden a productos "
+                "consultados en el catálogo público de Alsuper "
+                "y pueden cambiar por promociones, existencias, "
+                "zona y fecha de compra."
+            ),
+            small_style,
+        )
+    )
+
+
+    if hay_precios_faltantes:
+
+        story.append(
+            Spacer(
+                1,
+                5,
+            )
+        )
+
+        story.append(
+            Paragraph(
+                (
+                    "ADVERTENCIA: El total de compras es "
+                    "parcial debido a productos cuyo precio "
+                    "real no estuvo disponible durante "
+                    "la consulta."
+                ),
+                small_style,
+            )
+        )
 
 
     # ========================================================
@@ -1955,10 +2773,8 @@ Cada día debe estar claramente separado.
             onLaterPages=agregar_pie_pagina,
         )
 
-        pdf_bytes = (
-            pdf_buffer
-            .getvalue()
-        )
+
+        pdf_bytes = pdf_buffer.getvalue()
 
 
         st.download_button(
@@ -1968,8 +2784,7 @@ Cada día debe estar claramente separado.
             ),
             data=pdf_bytes,
             file_name=(
-                "KashCook_"
-                "Plan.pdf"
+                "KashCook_Plan.pdf"
             ),
             mime="application/pdf",
             use_container_width=True,
@@ -1982,10 +2797,8 @@ Cada día debe estar claramente separado.
             f"Error al generar PDF: {e}"
         )
 
-
 else:
 
     st.info(
-        "👋 Configura tu Groq API Key "
-        "para comenzar."
+        "👋 KashCook."
     )
