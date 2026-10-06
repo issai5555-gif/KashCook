@@ -3,7 +3,7 @@ from groq import Groq
 import io
 
 from reportlab.lib.pagesizes import letter
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, HRFlowable
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, HRFlowable, Table, TableStyle
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib import colors
 
@@ -78,9 +78,7 @@ if groq_key:
                     f"- Tiempos: {', '.join(tiempos)}. "
                     f"- Utensilios: {', '.join(utensilios)}. "
                     f"- Restricciones: {restringidos if restringidos else 'Ninguna'}. "
-                    "\nEstructura tu respuesta limpiamente separando en dos secciones obligatorias:"
-                    "\n1. PLAN DE MENÚS Y RECETAS POR DÍA (platillo, ingredientes y preparación)."
-                    "\n2. LISTA DE COMPRAS Y COSTOS EN ALSUPER (CHIHUAHUA) (producto, cantidad y costo en MXN, cerrando con el costo total)."
+                    "\nEstructura tu respuesta de forma clara y limpia con títulos de sección marcados con '###'."
                 )
                 
                 try:
@@ -96,37 +94,103 @@ if groq_key:
                     st.markdown(content)
                     
                     pdf_buffer = io.BytesIO()
-                    doc = SimpleDocTemplate(pdf_buffer, pagesize=letter, rightMargin=36, leftMargin=36, topMargin=36, bottomMargin=36)
+                    # Márgenes de 25 unidades para aprovechar mejor el ancho de página carta
+                    doc = SimpleDocTemplate(pdf_buffer, pagesize=letter, rightMargin=25, leftMargin=25, topMargin=30, bottomMargin=30)
                     
                     styles = getSampleStyleSheet()
-                    t_style = ParagraphStyle('ReportTitle', parent=styles['Heading1'], fontName='Helvetica-Bold', fontSize=15, leading=18, alignment=1, textColor=colors.HexColor('#1B3B6F'))
-                    s_style = ParagraphStyle('ReportSubtitle', parent=styles['Normal'], fontName='Helvetica-Oblique', fontSize=9.5, leading=13, alignment=1, textColor=colors.HexColor('#6D7275'))
-                    sec_style = ParagraphStyle('SectionHeader', parent=styles['Heading2'], fontName='Helvetica-Bold', fontSize=11, leading=15, textColor=colors.HexColor('#065A82'), spaceBefore=10, spaceAfter=4)
-                    b_style = ParagraphStyle('ReportBody', parent=styles['Normal'], fontName='Helvetica', fontSize=9, leading=12.5, textColor=colors.HexColor('#212529'), spaceAfter=3)
+                    t_style = ParagraphStyle('ReportTitle', parent=styles['Heading1'], fontName='Helvetica-Bold', fontSize=14, leading=16, alignment=1, textColor=colors.HexColor('#1B3B6F'))
+                    s_style = ParagraphStyle('ReportSubtitle', parent=styles['Normal'], fontName='Helvetica-Oblique', fontSize=9, leading=12, alignment=1, textColor=colors.HexColor('#6D7275'))
+                    sec_style = ParagraphStyle('SectionHeader', parent=styles['Heading2'], fontName='Helvetica-Bold', fontSize=10.5, leading=14, textColor=colors.HexColor('#065A82'), spaceBefore=8, spaceAfter=4)
+                    b_style = ParagraphStyle('ReportBody', parent=styles['Normal'], fontName='Helvetica', fontSize=8.5, leading=11, textColor=colors.HexColor('#212529'))
+                    th_style = ParagraphStyle('TableHeader', parent=styles['Normal'], fontName='Helvetica-Bold', fontSize=8.5, leading=11, textColor=colors.white, alignment=1)
                     
                     story = [
                         Paragraph("KashCook - Plan de Compras, Recetas y Presupuesto", t_style),
-                        Paragraph("Cotización Oficial en Alsuper (Chihuahua, Chih.) | Reporte Inteligente", s_style),
-                        Spacer(1, 8),
-                        HRFlowable(width="100%", thickness=1, color=colors.HexColor('#CCCCCC'), spaceAfter=12)
+                        Paragraph(f"Cotización Oficial en Alsuper (Chihuahua, Chih.) | {dias} Días | {personas} Personas", s_style),
+                        Spacer(1, 6),
+                        HRFlowable(width="100%", thickness=1, color=colors.HexColor('#CCCCCC'), spaceAfter=8)
                     ]
 
+                    # Parsear el contenido estructurado en tablas limpias para el PDF
+                    current_section = ""
+                    table_data = []
+
                     for raw_line in content.split('\n'):
-                        clean_line = raw_line.replace('*', '').replace('|', ' ').strip()
-                        if not clean_line:
-                            story.append(Spacer(1, 4))
+                        line = raw_line.strip()
+                        if not line:
                             continue
                         
-                        upper_line = clean_line.upper()
-                        is_header = any(k in upper_line for k in ["DIA", "DÍA", "LISTA DE COMPRAS", "PLAN DE MENUS", "COSTOS", "PRESUPUESTO"])
-                        
-                        safe_line = clean_line.replace('&', '&').replace('<', '<').replace('>', '>')
-                        
-                        if is_header and len(clean_line) < 60:
-                            story.append(Paragraph(safe_line, sec_style))
+                        if line.startswith('#') or 'PLAN DE MENÚS' in line.upper() or 'LISTA DE COMPRAS' in line.upper() or 'COSTOS' in line.upper():
+                            # Si teníamos una tabla acumulada, la volcamos al story antes de cambiar de sección
+                            if len(table_data) > 1:
+                                t = Table(table_data, colWidths=[100, 140, 140, 180])
+                                t.setStyle(TableStyle([
+                                    ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#065A82')),
+                                    ('ALIGN', (0,0), (-1,-1), 'LEFT'),
+                                    ('VALIGN', (0,0), (-1,-1), 'TOP'),
+                                    ('TEXTCOLOR', (0,0), (-1,0), colors.white),
+                                    ('BOTTOMPADDING', (0,0), (-1,-1), 4),
+                                    ('TOPPADDING', (0,0), (-1,-1), 4),
+                                    ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor('#D3D3D3')),
+                                ]))
+                                story.append(t)
+                                story.append(Spacer(1, 6))
+                                table_data = []
+
+                            clean_header = line.replace('#', '').strip()
+                            story.append(Paragraph(clean_header, sec_style))
+                            current_section = clean_header.upper()
+                            
+                            # Agregar cabecera predeterminada si es sección de menús o compras
+                            if 'MENÚ' in current_section or 'RECETA' in current_section:
+                                table_data.append([
+                                    Paragraph("**Día / Tiempo**", th_style),
+                                    Paragraph("**Platillo**", th_style),
+                                    Paragraph("**Ingredientes**", th_style),
+                                    Paragraph("**Preparación**", th_style)
+                                ])
+                            elif 'COMPRA' in current_section or 'COSTO' in current_section:
+                                table_data.append([
+                                    Paragraph("**Artículo / Producto**", th_style),
+                                    Paragraph("**Cantidad**", th_style),
+                                    Paragraph("**Costo Unitario**", th_style),
+                                    Paragraph("**Costo Total (Alsuper)**", th_style)
+                                ])
                         else:
-                            story.append(Paragraph(safe_line, b_style))
-                    
+                            # Procesar líneas de contenido (intentar separar por pipes o guiones si vienen en formato tabular)
+                            parts = [p.strip() for p in line.split('|') if p.strip()]
+                            if len(parts) >= 2:
+                                row_cells = [Paragraph(p.replace('*', ''), b_style) for p in parts[:4]]
+                                # Completar celdas si faltan columnas
+                                while len(row_cells) < 4:
+                                    row_cells.append(Paragraph("", b_style))
+                                table_data.append(row_cells)
+                            else:
+                                # Si es texto plano suelto, agregarlo como párrafo normal
+                                if len(table_data) > 1:
+                                    t = Table(table_data, colWidths=[100, 140, 140, 180])
+                                    t.setStyle(TableStyle([
+                                        ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#065A82')),
+                                        ('ALIGN', (0,0), (-1,-1), 'LEFT'),
+                                        ('VALIGN', (0,0), (-1,-1), 'TOP'),
+                                        ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor('#D3D3D3')),
+                                    ]))
+                                    story.append(t)
+                                    story.append(Spacer(1, 6))
+                                    table_data = []
+                                story.append(Paragraph(line.replace('*', ''), b_style))
+
+                    # Volcar cualquier tabla pendiente al final
+                    if len(table_data) > 1:
+                        t = Table(table_data, colWidths=[100, 140, 140, 180])
+                        t.setStyle(TableStyle([
+                            ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#065A82')),
+                            ('ALIGN', (0,0), (-1,-1), 'LEFT'),
+                            ('VALIGN', (0,0), (-1,-1), 'TOP'),
+                            ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor('#D3D3D3')),
+                        ]))
+                        story.append(t)
+
                     doc.build(story)
                     pdf_bytes = pdf_buffer.getvalue()
 
