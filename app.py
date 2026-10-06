@@ -111,7 +111,7 @@ if groq_key:
                     st.markdown("---")
                     st.markdown(content)
                     
-                    # Generación del PDF con FPDF protegido contra desbordamiento
+                    # Generación del PDF
                     class PDF(FPDF):
                         def header(self):
                             self.set_font('helvetica', 'B', 14)
@@ -129,7 +129,6 @@ if groq_key:
                     pdf.add_page()
                     pdf.set_font('helvetica', '', 10)
                     
-                    # Limpieza de caracteres y protección contra líneas demasiado largas
                     safe_text = content.encode('latin-1', 'replace').decode('latin-1')
                     
                     for line in safe_text.split('\n'):
@@ -138,16 +137,15 @@ if groq_key:
                             pdf.ln(3)
                             continue
                         
-                        # Si una línea es muy larga, la divide en bloques seguros para evitar errores de espacio
                         try:
                             pdf.multi_cell(0, 5, clean_line)
                         except Exception:
                             for i in range(0, len(clean_line), 90):
                                 pdf.multi_cell(0, 5, clean_line[i:i+90])
                     
-                    pdf_bytes = bytes(pdf.output())
+                    # Salida corregida para fpdf2 en Streamlit
+                    pdf_bytes = pdf.output(dest='S')
 
-                    # Botón de descarga en PDF
                     st.download_button(
                         label="📄 Descargar Recetas, Costos y Menú en PDF",
                         data=pdf_bytes,
