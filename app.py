@@ -98,7 +98,7 @@ if groq_key:
                 
                 try:
                     completion = client.chat.completions.create(
-                        model="llama-3.1-8b-instant",  # Modelo actualizado y 100% disponible
+                        model="llama3-8b-8192",
                         messages=[
                             {"role": "user", "content": prompt_text}
                         ],
