@@ -98,7 +98,7 @@ if groq_key:
                 
                 try:
                     completion = client.chat.completions.create(
-                        model="llama3-8b-8192",
+                        model="openai/gpt-oss-20b",  # Modelo actual y activo en Groq
                         messages=[
                             {"role": "user", "content": prompt_text}
                         ],
