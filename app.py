@@ -112,6 +112,6 @@ if groq_key:
                         HRFlowable(width="100%", thickness=1, color=colors.HexColor('#CCCCCC'), spaceAfter=12)
                     ]
                     
-                    def sainear_texto(texto):
+                    def sainear(texto):
                         t = texto.replace('&', '&').replace('<', '<').replace('>', '>')
-                        # Reemplaza cualquier variante de salto de línea por la etiqueta XML correcta
+                        t = re.sub(r'(?i)', '
