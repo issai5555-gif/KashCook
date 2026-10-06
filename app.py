@@ -68,33 +68,34 @@ if groq_key:
         if not tiempos or not tiendas_seleccionadas or not estilos_seleccionados:
             st.warning("⚠ Por favor selecciona al menos un tiempo, un supermercado y un estilo culinario.")
         else:
-            with st.spinner("🤖 KashCook calculando costos exactos en Alsuper y generando documento ejecutivo con ReportLab..."):
+            with st.spinner("🤖 KashCook calculando costos reales en Alsuper y generando documento ejecutivo completo..."):
                 prompt_text = (
                     f"Actúa como un Chef experto y asesor financiero de hogar para la app KashCook. "
-                    f"Genera un plan de menús detallado con recetas y una lista de compras con costos obligatoria y detallada cotizada en **Alsuper (Chihuahua, Chih.)** para {dias} días y {personas} personas, "
+                    f"Genera un plan de menús COMPLETAMENTE DESARROLLADO Y DETALLADO para TODOS los {dias} días (incluyendo tiempos seleccionados: {', '.join(tiempos)}), con recetas paso a paso para cada tiempo y día sin omitir ninguno. "
+                    f"Incluye una lista de compras con costos reales y actualizados al día de hoy en **Alsuper (Chihuahua, Chih.)** para {personas} personas, "
                     f"respetando estrictamente un presupuesto máximo de **${presupuesto} pesos mexicanos (MXN)**. "
                     f"- Supermercado principal: Alsuper. "
                     f"- Estilos: {', '.join(estilos_seleccionados)}. "
-                    f"- Tiempos: {', '.join(tiempos)}. "
                     f"- Utensilios: {', '.join(utensilios)}. "
                     f"- Restricciones: {restringidos if restringidos else 'Ninguna'}. "
-                    "\nEstructura tu respuesta de forma clara y limpia con títulos de sección marcados con '###'."
+                    "\nIMPORTANTE: No recortes, resumas ni dejes incompleto ningún día. Escribe la planeación completa de los días solicitados de principio a fin. "
+                    "\nEstructura tu respuesta usando tablas en formato Markdown con columnas separadas por pipes (|) para las secciones de menú y de lista de compras."
                 )
                 
                 try:
                     completion = client.chat.completions.create(
                         model="openai/gpt-oss-120b",
                         messages=[{"role": "user", "content": prompt_text}],
-                        temperature=0.6,
+                        temperature=0.5,
+                        max_tokens=4096
                     )
                     
                     content = completion.choices[0].message.content
-                    st.success("¡Plan culinario, cotización en Alsuper y recetas listos! 🎉")
+                    st.success("¡Plan culinario detallado, cotización actualizada en Alsuper y recetas listos! 🎉")
                     st.markdown("---")
                     st.markdown(content)
                     
                     pdf_buffer = io.BytesIO()
-                    # Márgenes de 25 unidades para aprovechar mejor el ancho de página carta
                     doc = SimpleDocTemplate(pdf_buffer, pagesize=letter, rightMargin=25, leftMargin=25, topMargin=30, bottomMargin=30)
                     
                     styles = getSampleStyleSheet()
@@ -106,12 +107,11 @@ if groq_key:
                     
                     story = [
                         Paragraph("KashCook - Plan de Compras, Recetas y Presupuesto", t_style),
-                        Paragraph(f"Cotización Oficial en Alsuper (Chihuahua, Chih.) | {dias} Días | {personas} Personas", s_style),
+                        Paragraph(f"Cotización Actualizada en Alsuper (Chihuahua, Chih.) | {dias} Días | {personas} Personas", s_style),
                         Spacer(1, 6),
                         HRFlowable(width="100%", thickness=1, color=colors.HexColor('#CCCCCC'), spaceAfter=8)
                     ]
 
-                    # Parsear el contenido estructurado en tablas limpias para el PDF
                     current_section = ""
                     table_data = []
 
@@ -120,8 +120,7 @@ if groq_key:
                         if not line:
                             continue
                         
-                        if line.startswith('#') or 'PLAN DE MENÚS' in line.upper() or 'LISTA DE COMPRAS' in line.upper() or 'COSTOS' in line.upper():
-                            # Si teníamos una tabla acumulada, la volcamos al story antes de cambiar de sección
+                        if line.startswith('#') or 'PLAN DE MENÚS' in line.upper() or 'LISTA DE COMPRAS' in line.upper() or 'COSTOS' in line.upper() or 'MENÚ' in line.upper():
                             if len(table_data) > 1:
                                 t = Table(table_data, colWidths=[100, 140, 140, 180])
                                 t.setStyle(TableStyle([
@@ -141,7 +140,6 @@ if groq_key:
                             story.append(Paragraph(clean_header, sec_style))
                             current_section = clean_header.upper()
                             
-                            # Agregar cabecera predeterminada si es sección de menús o compras
                             if 'MENÚ' in current_section or 'RECETA' in current_section:
                                 table_data.append([
                                     Paragraph("**Día / Tiempo**", th_style),
@@ -157,16 +155,13 @@ if groq_key:
                                     Paragraph("**Costo Total (Alsuper)**", th_style)
                                 ])
                         else:
-                            # Procesar líneas de contenido (intentar separar por pipes o guiones si vienen en formato tabular)
                             parts = [p.strip() for p in line.split('|') if p.strip()]
-                            if len(parts) >= 2:
+                            if len(parts) >= 2 and not ('---' in parts[0]):
                                 row_cells = [Paragraph(p.replace('*', ''), b_style) for p in parts[:4]]
-                                # Completar celdas si faltan columnas
                                 while len(row_cells) < 4:
                                     row_cells.append(Paragraph("", b_style))
                                 table_data.append(row_cells)
-                            else:
-                                # Si es texto plano suelto, agregarlo como párrafo normal
+                            elif not ('---' in line):
                                 if len(table_data) > 1:
                                     t = Table(table_data, colWidths=[100, 140, 140, 180])
                                     t.setStyle(TableStyle([
@@ -180,7 +175,6 @@ if groq_key:
                                     table_data = []
                                 story.append(Paragraph(line.replace('*', ''), b_style))
 
-                    # Volcar cualquier tabla pendiente al final
                     if len(table_data) > 1:
                         t = Table(table_data, colWidths=[100, 140, 140, 180])
                         t.setStyle(TableStyle([
@@ -195,7 +189,7 @@ if groq_key:
                     pdf_bytes = pdf_buffer.getvalue()
 
                     st.download_button(
-                        label="📄 Descargar Recetas, Lista de Alsuper y Presupuesto en PDF",
+                        label="📄 Descargar Recetas Completas, Lista de Alsuper y Presupuesto en PDF",
                         data=pdf_bytes,
                         file_name="KashCook_Alsuper_Presupuesto.pdf",
                         mime="application/pdf"
