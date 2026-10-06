@@ -1,3 +1,5 @@
 streamlit
 groq
+requests
+beautifulsoup4
 reportlab
