@@ -82,19 +82,19 @@ if groq_key:
         if not tiempos or not tiendas_seleccionadas or not estilos_seleccionados:
             st.warning("⚠ Por favor selecciona al menos un tiempo, un supermercado y un estilo culinario.")
         else:
-            with st.spinner("🤖 KashCook calculando costos de insumos, recetas y generando tu documento PDF..."):
+            with st.spinner("🤖 KashCook calculando costos exactos de insumos en Alsuper y generando tu documento PDF..."):
                 prompt_text = (
                     f"Actúa como un Chef experto y asesor financiero de hogar para la app KashCook. "
-                    f"Genera un plan de menús detallado con recetas y una lista de compras con costos exacta para {dias} días para {personas} personas, "
+                    f"Genera un plan de menús detallado con recetas y una lista de compras con costos estimada obligatoria para cada ingrediente cotizada en **Alsuper (Chihuahua, Chih.)** para {dias} días y {personas} personas, "
                     f"respetando estrictamente un presupuesto máximo de **${presupuesto} pesos mexicanos (MXN)**. "
-                    f"- Supermercados de referencia: {', '.join(tiendas_seleccionadas)} (Chihuahua, Chihuahua, México) "
+                    f"- Supermercado principal: Alsuper "
                     f"- Estilos culinarios: {', '.join(estilos_seleccionados)} "
                     f"- Tiempos incluidos: {', '.join(tiempos)} "
                     f"- Utensilios disponibles: {', '.join(utensilios)} "
                     f"- Restricciones / Alergias: {restringidos if restringidos else 'Ninguna'} "
-                    "\nEstructura tu respuesta limpiamente en párrafos o listas con guiones (evita tablas complejas de Markdown), separando:"
-                    "\n1. **Plan de Menús y Recetas por Día** (nombre del platillo, ingredientes con cantidades y pasos de preparación)."
-                    "\n2. **Lista de Compras y Costos de Insumos** (producto, cantidad y costo estimado en MXN, asegurando que la suma no rebase los $" + str(presupuesto) + " MXN)."
+                    "\nDebes estructurar tu respuesta de forma completa incluyendo dos secciones obligatorias y explícitas:"
+                    "\n1. **PLAN DE MENÚS Y RECETAS POR DÍA** (nombre del platillo, ingredientes con cantidades exactas y pasos de preparación enumerados)."
+                    "\n2. **LISTA DE COMPRAS Y COSTOS EN ALSUPER (CHIHUAHUA)** (desglose detallado de cada producto, cantidad a comprar y costo estimado en pesos mexicanos, cerrando con el costo total que no rebase los $" + str(presupuesto) + " MXN)."
                 )
                 
                 try:
@@ -107,47 +107,57 @@ if groq_key:
                     )
                     
                     content = completion.choices[0].message.content
-                    st.success("¡Tu plan culinario, recetas y cotización están listos! 🎉")
+                    st.success("¡Tu plan culinario, cotización en Alsuper y recetas están listos! 🎉")
                     st.markdown("---")
                     st.markdown(content)
                     
-                    # Generación profesional de PDF con FPDF
+                    # Generación profesional de PDF blindada contra desbordamiento horizontal
                     pdf = FPDF(orientation='P', unit='mm', format='A4')
                     pdf.set_auto_page_break(auto=True, margin=15)
                     pdf.add_page()
                     
-                    # Encabezado formal
-                    pdf.set_font('helvetica', 'B', 16)
+                    # Encabezado formal del reporte institucional
+                    pdf.set_font('helvetica', 'B', 15)
                     pdf.cell(0, 8, 'KashCook - Plan de Compras, Recetas y Presupuesto', 0, 1, 'C')
                     pdf.set_font('helvetica', 'I', 10)
-                    pdf.cell(0, 6, 'Chihuahua, Chihuahua, Mexico | Reporte Oficial', 0, 1, 'C')
-                    pdf.ln(5)
-                    pdf.set_draw_color(200, 200, 200)
+                    pdf.cell(0, 6, 'Cotizacion Oficial en Alsuper (Chihuahua, Chih.) | Reporte Inteligente', 0, 1, 'C')
+                    pdf.ln(4)
+                    pdf.set_draw_color(180, 180, 180)
                     pdf.line(10, pdf.get_y(), 200, pdf.get_y())
-                    pdf.ln(8)
+                    pdf.ln(6)
                     
-                    # Procesamiento y limpieza rigurosa del contenido
-                    pdf.set_font('helvetica', '', 10)
+                    # Procesamiento seguro de líneas para evitar el error de caracteres anchos o espacios
+                    pdf.set_font('helvetica', '', 9.5)
                     
-                    # Limpiamos caracteres que puedan corromper la codificación latin-1 estándar de FPDF
                     cleaned_content = content.encode('latin-1', 'ignore').decode('latin-1')
                     
-                    for line in cleaned_content.split('\n'):
-                        # Quitamos asteriscos y numerales sobrantes de markdown pero preservamos la estructura
-                        formatted_line = line.replace('**', '').replace('###', '').replace('##', '').replace('#', '').strip()
+                    for raw_line in cleaned_content.split('\n'):
+                        line = raw_line.replace('*', '').replace('#', '').strip()
                         
-                        if not formatted_line:
-                            pdf.ln(4)
+                        if not line:
+                            pdf.ln(3)
                             continue
                         
-                        # Detectamos si es un encabezado de sección principal para darle negrita
-                        if line.startswith('#') or ('**' in line and len(formatted_line) < 60):
+                        # Detectar títulos de sección o encabezados principales
+                        is_header = any(keyword in raw_line.upper() for keyword in ["DÍA", "DIA", "LISTA DE COMPRAS", "PLAN DE MENÚS", "COSTOS", "RECETAS"])
+                        
+                        if is_header and len(line) < 60:
+                            pdf.ln(3)
                             pdf.set_font('helvetica', 'B', 11)
-                            pdf.ln(2)
-                            pdf.multi_cell(0, 6, formatted_line)
-                            pdf.set_font('helvetica', '', 10)
+                            pdf.set_text_color(20, 80, 120)
+                            pdf.cell(0, 6, line[:90], 0, 1)
+                            pdf.set_font('helvetica', '', 9.5)
+                            pdf.set_text_color(0, 0, 0)
                         else:
-                            pdf.multi_cell(0, 5, formatted_line)
+                            # Cortar de forma segura líneas largas para prevenir errores de ancho en FPDF
+                            while len(line) > 95:
+                                split_idx = line[:95].rfind(' ')
+                                if split_idx == -1: 
+                                    split_idx = 95
+                                pdf.cell(0, 5, line[:split_idx], 0, 1)
+                                line = line[split_idx:].strip()
+                            if line:
+                                pdf.cell(0, 5, line, 0, 1)
                     
                     # Extracción formal y segura del flujo de bytes
                     pdf_output = pdf.output(dest='S')
@@ -157,9 +167,9 @@ if groq_key:
                         pdf_bytes = bytes(pdf_output)
 
                     st.download_button(
-                        label="📄 Descargar Recetas, Costos y Menú en PDF",
+                        label="📄 Descargar Recetas, Lista de Alsuper y Presupuesto en PDF",
                         data=pdf_bytes,
-                        file_name="KashCook_Recetas_Presupuesto.pdf",
+                        file_name="KashCook_Alsuper_Presupuesto.pdf",
                         mime="application/pdf"
                     )
                     
