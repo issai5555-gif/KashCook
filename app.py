@@ -111,38 +111,48 @@ if groq_key:
                     st.markdown("---")
                     st.markdown(content)
                     
-                    # Generación limpia del PDF sin conflictos de cursor en cabecera
-                    pdf = FPDF()
-                    pdf.add_page()
+                    # Generación profesional de PDF con FPDF
+                    pdf = FPDF(orientation='P', unit='mm', format='A4')
                     pdf.set_auto_page_break(auto=True, margin=15)
+                    pdf.add_page()
                     
-                    # Título del documento dentro del flujo normal de la página
-                    pdf.set_font('helvetica', 'B', 14)
-                    pdf.cell(0, 10, 'KashCook - Plan de Compras, Recetas y Presupuesto', 0, 1, 'C')
+                    # Encabezado formal
+                    pdf.set_font('helvetica', 'B', 16)
+                    pdf.cell(0, 8, 'KashCook - Plan de Compras, Recetas y Presupuesto', 0, 1, 'C')
                     pdf.set_font('helvetica', 'I', 10)
-                    pdf.cell(0, 6, 'Chihuahua, Chihuahua, Mexico', 0, 1, 'C')
+                    pdf.cell(0, 6, 'Chihuahua, Chihuahua, Mexico | Reporte Oficial', 0, 1, 'C')
+                    pdf.ln(5)
+                    pdf.set_draw_color(200, 200, 200)
+                    pdf.line(10, pdf.get_y(), 200, pdf.get_y())
                     pdf.ln(8)
                     
-                    # Cuerpo del texto
+                    # Procesamiento y limpieza rigurosa del contenido
                     pdf.set_font('helvetica', '', 10)
-                    safe_text = content.encode('latin-1', 'replace').decode('latin-1')
                     
-                    for line in safe_text.split('\n'):
-                        clean_line = line.replace('*', '').replace('#', '')
-                        if len(clean_line.strip()) == 0:
-                            pdf.ln(3)
+                    # Limpiamos caracteres que puedan corromper la codificación latin-1 estándar de FPDF
+                    cleaned_content = content.encode('latin-1', 'ignore').decode('latin-1')
+                    
+                    for line in cleaned_content.split('\n'):
+                        # Quitamos asteriscos y numerales sobrantes de markdown pero preservamos la estructura
+                        formatted_line = line.replace('**', '').replace('###', '').replace('##', '').replace('#', '').strip()
+                        
+                        if not formatted_line:
+                            pdf.ln(4)
                             continue
                         
-                        try:
-                            pdf.multi_cell(0, 5, clean_line)
-                        except Exception:
-                            for i in range(0, len(clean_line), 90):
-                                pdf.multi_cell(0, 5, clean_line[i:i+90])
+                        # Detectamos si es un encabezado de sección principal para darle negrita
+                        if line.startswith('#') or ('**' in line and len(formatted_line) < 60):
+                            pdf.set_font('helvetica', 'B', 11)
+                            pdf.ln(2)
+                            pdf.multi_cell(0, 6, formatted_line)
+                            pdf.set_font('helvetica', '', 10)
+                        else:
+                            pdf.multi_cell(0, 5, formatted_line)
                     
-                    # Extracción segura de los bytes del PDF
-                    pdf_output = pdf.output()
+                    # Extracción formal y segura del flujo de bytes
+                    pdf_output = pdf.output(dest='S')
                     if isinstance(pdf_output, str):
-                        pdf_bytes = pdf_output.encode('latin-1')
+                        pdf_bytes = pdf_output.encode('latin-1', 'ignore')
                     else:
                         pdf_bytes = bytes(pdf_output)
 
