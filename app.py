@@ -111,24 +111,20 @@ if groq_key:
                     st.markdown("---")
                     st.markdown(content)
                     
-                    # Generación del PDF
-                    class PDF(FPDF):
-                        def header(self):
-                            self.set_font('helvetica', 'B', 14)
-                            self.cell(0, 10, 'KashCook - Plan de Compras, Recetas y Presupuesto', 0, 1, 'C')
-                            self.set_font('helvetica', 'I', 10)
-                            self.cell(0, 6, 'Chihuahua, Chihuahua, Mexico', 0, 1, 'C')
-                            self.ln(5)
-
-                        def footer(self):
-                            self.set_y(-15)
-                            self.set_font('helvetica', 'I', 8)
-                            self.cell(0, 10, f'Generado por KashCook AI - Pagina {self.page_no()}', 0, 0, 'C')
-
-                    pdf = PDF()
+                    # Generación limpia del PDF sin conflictos de cursor en cabecera
+                    pdf = FPDF()
                     pdf.add_page()
-                    pdf.set_font('helvetica', '', 10)
+                    pdf.set_auto_page_break(auto=True, margin=15)
                     
+                    # Título del documento dentro del flujo normal de la página
+                    pdf.set_font('helvetica', 'B', 14)
+                    pdf.cell(0, 10, 'KashCook - Plan de Compras, Recetas y Presupuesto', 0, 1, 'C')
+                    pdf.set_font('helvetica', 'I', 10)
+                    pdf.cell(0, 6, 'Chihuahua, Chihuahua, Mexico', 0, 1, 'C')
+                    pdf.ln(8)
+                    
+                    # Cuerpo del texto
+                    pdf.set_font('helvetica', '', 10)
                     safe_text = content.encode('latin-1', 'replace').decode('latin-1')
                     
                     for line in safe_text.split('\n'):
@@ -143,7 +139,7 @@ if groq_key:
                             for i in range(0, len(clean_line), 90):
                                 pdf.multi_cell(0, 5, clean_line[i:i+90])
                     
-                    # Solución robusta para extraer los bytes correctamente en fpdf2
+                    # Extracción segura de los bytes del PDF
                     pdf_output = pdf.output()
                     if isinstance(pdf_output, str):
                         pdf_bytes = pdf_output.encode('latin-1')
