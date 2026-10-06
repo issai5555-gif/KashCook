@@ -143,8 +143,12 @@ if groq_key:
                             for i in range(0, len(clean_line), 90):
                                 pdf.multi_cell(0, 5, clean_line[i:i+90])
                     
-                    # Salida corregida para fpdf2 en Streamlit
-                    pdf_bytes = pdf.output(dest='S')
+                    # Solución robusta para extraer los bytes correctamente en fpdf2
+                    pdf_output = pdf.output()
+                    if isinstance(pdf_output, str):
+                        pdf_bytes = pdf_output.encode('latin-1')
+                    else:
+                        pdf_bytes = bytes(pdf_output)
 
                     st.download_button(
                         label="📄 Descargar Recetas, Costos y Menú en PDF",
