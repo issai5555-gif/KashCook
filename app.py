@@ -111,7 +111,7 @@ if groq_key:
                     st.markdown("---")
                     st.markdown(content)
                     
-                    # Generación del PDF con FPDF
+                    # Generación del PDF con FPDF corregido a bytes
                     class PDF(FPDF):
                         def header(self):
                             self.set_font('helvetica', 'B', 14)
@@ -123,7 +123,7 @@ if groq_key:
                         def footer(self):
                             self.set_y(-15)
                             self.set_font('helvetica', 'I', 8)
-                            self.cell(0, 10, f'Generado por KashCook AI - Página {self.page_no()}', 0, 0, 'C')
+                            self.cell(0, 10, f'Generado por KashCook AI - Pagina {self.page_no()}', 0, 0, 'C')
 
                     pdf = PDF()
                     pdf.add_page()
@@ -135,7 +135,7 @@ if groq_key:
                     for line in safe_text.split('\n'):
                         pdf.multi_cell(0, 5, line)
                     
-                    pdf_bytes = pdf.output()
+                    pdf_bytes = bytes(pdf.output())
 
                     # Botón de descarga en PDF
                     st.download_button(
