@@ -32,12 +32,12 @@ if groq_key:
         soriana = st.checkbox("Soriana", value=False)
         walmart = st.checkbox("Walmart", value=False)
         aurrera = st.checkbox("Bodega Aurrerá", value=False)
-        dias = st.slider("Días a planificar:", 1, 7, 3)
+        dias = st.slider("Días a planificar:", 1, 7, 6)
 
     with col2:
         st.subheader("👥 2. Comensales y Presupuesto")
-        personas = st.slider("¿Para cuántas personas se va a cocinar?", 1, 10, 2)
-        presupuesto = st.number_input("💰 Presupuesto máximo (MXN):", min_value=200, max_value=10000, value=1500, step=100)
+        personas = st.slider("¿Para cuántas personas se va a cocinar?", 1, 10, 1)
+        presupuesto = st.number_input("💰 Presupuesto máximo (MXN):", min_value=200, max_value=10000, value=500, step=50)
 
         st.subheader("🍲 3. Estilos Culinarios")
         est_mex = st.checkbox("Mexicana Tradicional", value=True)
@@ -47,7 +47,7 @@ if groq_key:
         est_fit = st.checkbox("Saludable / Fitness", value=False)
 
         st.subheader("🍽️ 4. Tiempos de Comida")
-        c_des = st.checkbox("Desayuno", value=False)
+        c_des = st.checkbox("Desayuno", value=True)
         c_alm = st.checkbox("Almuerzo / Comida", value=True)
         c_cen = st.checkbox("Cena", value=True)
 
@@ -68,12 +68,12 @@ if groq_key:
         if not tiempos or not tiendas_seleccionadas or not estilos_seleccionados:
             st.warning("⚠ Por favor selecciona al menos un tiempo, un supermercado y un estilo culinario.")
         else:
-            with st.spinner("🤖 KashCook calculando costos reales en Alsuper y generando documento ejecutivo completo..."):
+            with st.spinner("🤖 KashCook calculando costos reales actualizados en Alsuper (Chihuahua) y generando documento completo..."):
                 prompt_text = (
                     f"Actúa como un Chef experto y asesor financiero de hogar para la app KashCook. "
-                    f"Genera un plan de menús COMPLETAMENTE DESARROLLADO Y DETALLADO para TODOS los {dias} días (incluyendo tiempos seleccionados: {', '.join(tiempos)}), con recetas paso a paso para cada tiempo y día sin omitir ninguno. "
-                    f"Incluye una lista de compras con costos reales y actualizados al día de hoy en **Alsuper (Chihuahua, Chih.)** para {personas} personas, "
-                    f"respetando estrictamente un presupuesto máximo de **${presupuesto} pesos mexicanos (MXN)**. "
+                    f"Genera un plan de menús COMPLETAMENTE DESARROLLADO Y DETALLADO para TODOS los {dias} días (incluyendo los tiempos: {', '.join(tiempos)}), con recetas paso a paso completas para cada tiempo y día sin omitir absolutamente ninguno. "
+                    f"IMPORTANTE: Utiliza precios estrictamente reales y vigentes en Alsuper (Chihuahua, Chih.) para {personas} persona(s), "
+                    f"respetando estrictamente un presupuesto máximo de ${presupuesto} pesos mexicanos (MXN). "
                     f"- Supermercado principal: Alsuper. "
                     f"- Estilos: {', '.join(estilos_seleccionados)}. "
                     f"- Utensilios: {', '.join(utensilios)}. "
@@ -86,8 +86,8 @@ if groq_key:
                     completion = client.chat.completions.create(
                         model="openai/gpt-oss-120b",
                         messages=[{"role": "user", "content": prompt_text}],
-                        temperature=0.5,
-                        max_tokens=4096
+                        temperature=0.4,
+                        max_tokens=6144
                     )
                     
                     content = completion.choices[0].message.content
@@ -99,55 +99,53 @@ if groq_key:
                     doc = SimpleDocTemplate(pdf_buffer, pagesize=letter, rightMargin=25, leftMargin=25, topMargin=30, bottomMargin=30)
                     
                     styles = getSampleStyleSheet()
-                    t_style = ParagraphStyle('ReportTitle', parent=styles['Heading1'], fontName='Helvetica-Bold', fontSize=14, leading=16, alignment=1, textColor=colors.HexColor('#1B3B6F'))
-                    s_style = ParagraphStyle('ReportSubtitle', parent=styles['Normal'], fontName='Helvetica-Oblique', fontSize=9, leading=12, alignment=1, textColor=colors.HexColor('#6D7275'))
-                    sec_style = ParagraphStyle('SectionHeader', parent=styles['Heading2'], fontName='Helvetica-Bold', fontSize=10.5, leading=14, textColor=colors.HexColor('#065A82'), spaceBefore=8, spaceAfter=4)
-                    b_style = ParagraphStyle('ReportBody', parent=styles['Normal'], fontName='Helvetica', fontSize=8.5, leading=11, textColor=colors.HexColor('#212529'))
-                    th_style = ParagraphStyle('TableHeader', parent=styles['Normal'], fontName='Helvetica-Bold', fontSize=8.5, leading=11, textColor=colors.white, alignment=1)
+                    t_style = ParagraphStyle("ReportTitle", parent=styles["Heading1"], fontName="Helvetica-Bold", fontSize=14, leading=16, alignment=1, textColor=colors.HexColor("#1B3B6F"))
+                    s_style = ParagraphStyle("ReportSubtitle", parent=styles["Normal"], fontName="Helvetica-Oblique", fontSize=9, leading=12, alignment=1, textColor=colors.HexColor("#6D7275"))
+                    sec_style = ParagraphStyle("SectionHeader", parent=styles["Heading2"], fontName="Helvetica-Bold", fontSize=10.5, leading=14, textColor=colors.HexColor("#065A82"), spaceBefore=8, spaceAfter=4)
+                    b_style = ParagraphStyle("ReportBody", parent=styles["Normal"], fontName="Helvetica", fontSize=8.5, leading=11, textColor=colors.HexColor("#212529"))
+                    th_style = ParagraphStyle("TableHeader", parent=styles["Normal"], fontName="Helvetica-Bold", fontSize=8.5, leading=11, textColor=colors.white, alignment=1)
                     
                     story = [
                         Paragraph("KashCook - Plan de Compras, Recetas y Presupuesto", t_style),
-                        Paragraph(f"Cotización Actualizada en Alsuper (Chihuahua, Chih.) | {dias} Días | {personas} Personas", s_style),
+                        Paragraph(f"Cotización Vigente en Alsuper (Chihuahua, Chih.) | {dias} Días | {personas} Persona(s)", s_style),
                         Spacer(1, 6),
-                        HRFlowable(width="100%", thickness=1, color=colors.HexColor('#CCCCCC'), spaceAfter=8)
+                        HRFlowable(width="100%", thickness=1, color=colors.HexColor("#CCCCCC"), spaceAfter=8)
                     ]
 
-                    current_section = ""
                     table_data = []
 
-                    for raw_line in content.split('\n'):
+                    for raw_line in content.split("\n"):
                         line = raw_line.strip()
                         if not line:
                             continue
                         
-                        if line.startswith('#') or 'PLAN DE MENÚS' in line.upper() or 'LISTA DE COMPRAS' in line.upper() or 'COSTOS' in line.upper() or 'MENÚ' in line.upper():
+                        if line.startswith("#") or "PLAN DE MENÚS" in line.upper() or "LISTA DE COMPRAS" in line.upper() or "COSTOS" in line.upper() or "MENÚ" in line.upper():
                             if len(table_data) > 1:
                                 t = Table(table_data, colWidths=[100, 140, 140, 180])
                                 t.setStyle(TableStyle([
-                                    ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#065A82')),
-                                    ('ALIGN', (0,0), (-1,-1), 'LEFT'),
-                                    ('VALIGN', (0,0), (-1,-1), 'TOP'),
-                                    ('TEXTCOLOR', (0,0), (-1,0), colors.white),
-                                    ('BOTTOMPADDING', (0,0), (-1,-1), 4),
-                                    ('TOPPADDING', (0,0), (-1,-1), 4),
-                                    ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor('#D3D3D3')),
+                                    ("BACKGROUND", (0,0), (-1,0), colors.HexColor("#065A82")),
+                                    ("ALIGN", (0,0), (-1,-1), "LEFT"),
+                                    ("VALIGN", (0,0), (-1,-1), "TOP"),
+                                    ("TEXTCOLOR", (0,0), (-1,0), colors.white),
+                                    ("BOTTOMPADDING", (0,0), (-1,-1), 4),
+                                    ("TOPPADDING", (0,0), (-1,-1), 4),
+                                    ("GRID", (0,0), (-1,-1), 0.5, colors.HexColor("#D3D3D3")),
                                 ]))
                                 story.append(t)
                                 story.append(Spacer(1, 6))
                                 table_data = []
 
-                            clean_header = line.replace('#', '').strip()
+                            clean_header = line.replace("#", "").strip()
                             story.append(Paragraph(clean_header, sec_style))
-                            current_section = clean_header.upper()
                             
-                            if 'MENÚ' in current_section or 'RECETA' in current_section:
+                            if "MENÚ" in clean_header.upper() or "RECETA" in clean_header.upper():
                                 table_data.append([
                                     Paragraph("**Día / Tiempo**", th_style),
                                     Paragraph("**Platillo**", th_style),
                                     Paragraph("**Ingredientes**", th_style),
                                     Paragraph("**Preparación**", th_style)
                                 ])
-                            elif 'COMPRA' in current_section or 'COSTO' in current_section:
+                            elif "COMPRA" in clean_header.upper() or "COSTO" in clean_header.upper():
                                 table_data.append([
                                     Paragraph("**Artículo / Producto**", th_style),
                                     Paragraph("**Cantidad**", th_style),
@@ -155,33 +153,33 @@ if groq_key:
                                     Paragraph("**Costo Total (Alsuper)**", th_style)
                                 ])
                         else:
-                            parts = [p.strip() for p in line.split('|') if p.strip()]
-                            if len(parts) >= 2 and not ('---' in parts[0]):
-                                row_cells = [Paragraph(p.replace('*', ''), b_style) for p in parts[:4]]
+                            parts = [p.strip() for p in line.split("|") if p.strip()]
+                            if len(parts) >= 2 and not ("---" in parts[0]):
+                                row_cells = [Paragraph(p.replace("*", ""), b_style) for p in parts[:4]]
                                 while len(row_cells) < 4:
                                     row_cells.append(Paragraph("", b_style))
                                 table_data.append(row_cells)
-                            elif not ('---' in line):
+                            elif not ("---" in line):
                                 if len(table_data) > 1:
                                     t = Table(table_data, colWidths=[100, 140, 140, 180])
                                     t.setStyle(TableStyle([
-                                        ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#065A82')),
-                                        ('ALIGN', (0,0), (-1,-1), 'LEFT'),
-                                        ('VALIGN', (0,0), (-1,-1), 'TOP'),
-                                        ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor('#D3D3D3')),
+                                        ("BACKGROUND", (0,0), (-1,0), colors.HexColor("#065A82")),
+                                        ("ALIGN", (0,0), (-1,-1), "LEFT"),
+                                        ("VALIGN", (0,0), (-1,-1), "TOP"),
+                                        ("GRID", (0,0), (-1,-1), 0.5, colors.HexColor("#D3D3D3")),
                                     ]))
                                     story.append(t)
                                     story.append(Spacer(1, 6))
                                     table_data = []
-                                story.append(Paragraph(line.replace('*', ''), b_style))
+                                story.append(Paragraph(line.replace("*", ""), b_style))
 
                     if len(table_data) > 1:
                         t = Table(table_data, colWidths=[100, 140, 140, 180])
                         t.setStyle(TableStyle([
-                            ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#065A82')),
-                            ('ALIGN', (0,0), (-1,-1), 'LEFT'),
-                            ('VALIGN', (0,0), (-1,-1), 'TOP'),
-                            ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor('#D3D3D3')),
+                            ("BACKGROUND", (0,0), (-1,0), colors.HexColor("#065A82")),
+                            ("ALIGN", (0,0), (-1,-1), "LEFT"),
+                            ("VALIGN", (0,0), (-1,-1), "TOP"),
+                            ("GRID", (0,0), (-1,-1), 0.5, colors.HexColor("#D3D3D3")),
                         ]))
                         story.append(t)
 
@@ -198,4 +196,4 @@ if groq_key:
                 except Exception as e:
                     st.error(f"Error al conectar con Groq o generar PDF: {e}")
 else:
-    st.info("👋 Configura tu clave en Streamlit Secrets o ingrésala para comenzar.")
+    st.info("👋 Configura tu clave en Streamlit Secrets o ingrésala para comenzar.")    
