@@ -4,7 +4,7 @@ import io
 
 # Importaciones de ReportLab para un PDF profesional y estructurado
 from reportlab.lib.pagesizes import letter
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, HRFlowable
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib import colors
 
@@ -104,9 +104,9 @@ if groq_key:
                 )
                 
                 try:
-                    # Usamos un modelo altamente capaz y estructurado de Groq
+                    # Usamos el modelo de alta capacidad con compatibilidad garantizada
                     completion = client.chat.completions.create(
-                        model="llama-3.3-70b-versatile",
+                        model="openai/gpt-oss-120b",
                         messages=[
                             {"role": "user", "content": prompt_text}
                         ],
@@ -118,7 +118,7 @@ if groq_key:
                     st.markdown("---")
                     st.markdown(content)
                     
-                    # Generación del PDF con ReportLab (Estructura robusta)
+                    # Generación robusta del PDF con ReportLab
                     pdf_buffer = io.BytesIO()
                     doc = SimpleDocTemplate(
                         pdf_buffer,
@@ -131,14 +131,13 @@ if groq_key:
                     
                     styles = getSampleStyleSheet()
                     
-                    # Estilos profesionales personalizados
                     title_style = ParagraphStyle(
                         'ReportTitle',
                         parent=styles['Heading1'],
                         fontName='Helvetica-Bold',
-                        fontSize=16,
-                        leading=20,
-                        alignment=1, # Centrado
+                        fontSize=15,
+                        leading=18,
+                        alignment=1,
                         textColor=colors.HexColor('#1B3B6F')
                     )
                     
@@ -146,8 +145,8 @@ if groq_key:
                         'ReportSubtitle',
                         parent=styles['Normal'],
                         fontName='Helvetica-Oblique',
-                        fontSize=10,
-                        leading=14,
+                        fontSize=9.5,
+                        leading=13,
                         alignment=1,
                         textColor=colors.HexColor('#6D7275')
                     )
@@ -156,37 +155,34 @@ if groq_key:
                         'SectionHeader',
                         parent=styles['Heading2'],
                         fontName='Helvetica-Bold',
-                        fontSize=12,
-                        leading=16,
+                        fontSize=11,
+                        leading=15,
                         textColor=colors.HexColor('#065A82'),
-                        spaceBefore=12,
-                        spaceAfter=6
+                        spaceBefore=10,
+                        spaceAfter=4
                     )
                     
                     body_style = ParagraphStyle(
                         'ReportBody',
                         parent=styles['Normal'],
                         fontName='Helvetica',
-                        fontSize=9.5,
-                        leading=13,
+                        fontSize=9,
+                        leading=12.5,
                         textColor=colors.HexColor('#212529'),
-                        spaceAfter=4
+                        spaceAfter=3
                     )
                     
                     story = []
-                    
-                    # Encabezado del documento
                     story.append(Paragraph("KashCook - Plan de Compras, Recetas y Presupuesto", title_style))
                     story.append(Paragraph("Cotización Oficial en Alsuper (Chihuahua, Chih.) | Reporte Inteligente", subtitle_style))
-                    story.append(Spacer(1, 10))
-                    story.append(HRFlowable(width="100%", thickness=1, color=colors.HexColor('#CCCCCC'), spaceAfter=15))
+                    story.append(Spacer(1, 8))
+                    story.append(HRFlowable(width="100%", thickness=1, color=colors.HexColor('#CCCCCC'), spaceAfter=12))
                     
-                    # Procesamiento y adición de contenido al PDF
                     for raw_line in content.split('\n'):
                         clean_line = raw_line.replace('*', '').strip()
                         
                         if not clean_line:
-                            story.append(Spacer(1, 6))
+                            story.append(Spacer(1, 4))
                             continue
                         
                         upper_line = clean_line.upper()
@@ -195,7 +191,6 @@ if groq_key:
                         if is_header and len(clean_line) < 60:
                             story.append(Paragraph(clean_line, section_style))
                         else:
-                            # Reemplazamos caracteres especiales para evitar errores de codificación
                             safe_line = clean_line.replace('&', '&').replace('<', '<').replace('>', '>')
                             story.append(Paragraph(safe_line, body_style))
                     
