@@ -1,7 +1,6 @@
 import streamlit as st
 from groq import Groq
 import io
-import re
 
 # Importaciones de ReportLab para un PDF profesional y estructurado
 from reportlab.lib.pagesizes import letter
@@ -188,10 +187,9 @@ if groq_key:
                         upper_line = clean_line.upper()
                         is_header = any(keyword in upper_line for keyword in ["DIA", "DÍA", "LISTA DE COMPRAS", "PLAN DE MENUS", "COSTOS", "PRESUPUESTO"])
                         
-                        # Limpieza y saneamiento estricto de etiquetas HTML
+                        # Limpieza y saneamiento seguro sin expresiones regulares problemáticas
                         safe_line = (
                             clean_line.replace('&', '&')
                                       .replace('<', '<')
                                       .replace('>', '>')
-                        )
-                        safe_line = re.sub(r'', '
+                                      .replace('
