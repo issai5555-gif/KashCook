@@ -1,6 +1,7 @@
 import streamlit as st
 from groq import Groq
 import io
+import re
 
 # Importaciones de ReportLab para un PDF profesional y estructurado
 from reportlab.lib.pagesizes import letter
@@ -98,13 +99,12 @@ if groq_key:
                     f"- Tiempos incluidos: {', '.join(tiempos)} "
                     f"- Utensilios disponibles: {', '.join(utensilios)} "
                     f"- Restricciones / Alergias: {restringidos if restringidos else 'Ninguna'} "
-                    "\nEstructura tu respuesta de forma clara separando en dos secciones obligatorias:"
+                    "\nEstructura tu respuesta de forma clara usando párrafos limpios (sin tablas de texto ni tuberías |) separando en dos secciones obligatorias:"
                     "\n1. **PLAN DE MENÚS Y RECETAS POR DÍA** (nombre del platillo, ingredientes exactos y pasos de preparación enumerados)."
                     "\n2. **LISTA DE COMPRAS Y COSTOS EN ALSUPER (CHIHUAHUA)** (desglose de producto, cantidad y costo en MXN, cerrando con el costo total que no rebase los $" + str(presupuesto) + " MXN)."
                 )
                 
                 try:
-                    # Usamos el modelo de alta capacidad con compatibilidad garantizada
                     completion = client.chat.completions.create(
                         model="openai/gpt-oss-120b",
                         messages=[
@@ -118,7 +118,7 @@ if groq_key:
                     st.markdown("---")
                     st.markdown(content)
                     
-                    # Generación robusta del PDF con ReportLab
+                    # Generación robusta y limpia del PDF con ReportLab
                     pdf_buffer = io.BytesIO()
                     doc = SimpleDocTemplate(
                         pdf_buffer,
@@ -179,7 +179,7 @@ if groq_key:
                     story.append(HRFlowable(width="100%", thickness=1, color=colors.HexColor('#CCCCCC'), spaceAfter=12))
                     
                     for raw_line in content.split('\n'):
-                        clean_line = raw_line.replace('*', '').strip()
+                        clean_line = raw_line.replace('*', '').replace('|', ' ').strip()
                         
                         if not clean_line:
                             story.append(Spacer(1, 4))
@@ -188,23 +188,10 @@ if groq_key:
                         upper_line = clean_line.upper()
                         is_header = any(keyword in upper_line for keyword in ["DIA", "DÍA", "LISTA DE COMPRAS", "PLAN DE MENUS", "COSTOS", "PRESUPUESTO"])
                         
-                        if is_header and len(clean_line) < 60:
-                            story.append(Paragraph(clean_line, section_style))
-                        else:
-                            safe_line = clean_line.replace('&', '&').replace('<', '<').replace('>', '>')
-                            story.append(Paragraph(safe_line, body_style))
-                    
-                    doc.build(story)
-                    pdf_bytes = pdf_buffer.getvalue()
-
-                    st.download_button(
-                        label="📄 Descargar Recetas, Lista de Alsuper y Presupuesto en PDF",
-                        data=pdf_bytes,
-                        file_name="KashCook_Alsuper_Presupuesto.pdf",
-                        mime="application/pdf"
-                    )
-                    
-                except Exception as e:
-                    st.error(f"Error al conectar con Groq o generar PDF: {e}")
-else:
-    st.info("👋 Configura tu clave en Streamlit Secrets o ingrésala para comenzar.")
+                        # Limpieza y saneamiento estricto de etiquetas HTML para evitar errores de sintaxis en ReportLab
+                        safe_line = (
+                            clean_line.replace('&', '&')
+                                      .replace('<', '<')
+                                      .replace('>', '>')
+                        )
+                        safe_line = re.sub(r'', '
