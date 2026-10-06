@@ -1,8 +1,10 @@
 import io
 import json
+import math
 import re
 import html
 import requests
+import streamlit as st
 
 from bs4 import BeautifulSoup
 from groq import Groq
@@ -10,19 +12,17 @@ from groq import Groq
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_CENTER
 from reportlab.lib.pagesizes import letter
-from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.units import cm
 from reportlab.platypus import (
-    HRFlowable,
-    PageBreak,
-    Paragraph,
     SimpleDocTemplate,
+    Paragraph,
     Spacer,
     Table,
     TableStyle,
-    LongTable,
+    PageBreak,
+    KeepTogether,
 )
-
-import streamlit as st
 
 
 # ============================================================
@@ -30,1167 +30,992 @@ import streamlit as st
 # ============================================================
 
 st.set_page_config(
-    page_title="KashCook | Smart Kitchen",
+    page_title="KashCook AI",
     page_icon="🍳",
-    layout="wide",
+    layout="wide"
 )
-
-st.title("🍳 KashCook AI")
-st.markdown(
-    "Tu sistema inteligente de planificación culinaria y financiera."
-)
-
-st.markdown("---")
-
-
-# ============================================================
-# CONFIGURACIÓN GENERAL
-# ============================================================
-
-HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 "
-        "(KHTML, like Gecko) "
-        "Chrome/154.0 Safari/537.36"
-    ),
-    "Accept-Language": "es-MX,es;q=0.9",
-    "Accept": (
-        "text/html,application/xhtml+xml,"
-        "application/xml;q=0.9,image/webp,*/*;q=0.8"
-    ),
-}
 
 TIENDAS_DISPONIBLES = [
     "Alsuper",
     "Walmart",
     "Soriana",
-    "Bodega Aurrerá",
+    "Bodega Aurrerá"
 ]
 
 TOLERANCIA_PRESUPUESTO = 100.00
+
+# El sistema intentará utilizar al menos este porcentaje
+# del presupuesto cuando sea razonablemente posible.
+MIN_UTILIZACION_PRESUPUESTO = 0.90
 
 
 # ============================================================
 # CATÁLOGOS
 #
-# Los productos tienen:
-# - URL oficial
-# - precio de respaldo
-#
-# El sistema intenta primero obtener el precio de la página.
-# Si no lo consigue, utiliza el precio de respaldo.
+# IMPORTANTE:
+# precio = precio de UNA presentación
+# contenido = cantidad contenida en esa presentación
+# unidad_contenido = g, kg, ml, pieza, lata, etc.
 # ============================================================
-
 
 PRODUCTOS_ALSUPER = [
 
-    # POLLO
+    # ---------------- PROTEÍNAS ----------------
+
     {
+        "id": "alsuper_pollo_caderita",
         "tienda": "Alsuper",
-        "categoria": "Pollo",
-        "nombre_referencia": "Caderita de Pollo",
-        "presentacion": "Caderita de pollo",
-        "url": "https://alsuper.com/producto/caderita-de-pollo-44400",
-        "precio_respaldo": 44.90,
-    },
-    {
-        "tienda": "Alsuper",
-        "categoria": "Pollo",
-        "nombre_referencia": "Ala de Pollo Premium",
-        "presentacion": "Ala de pollo premium",
-        "url": "https://alsuper.com/producto/ala-de-pollo-premium-352077",
-        "precio_respaldo": 114.90,
+        "nombre": "Caderita de pollo",
+        "categoria": "pollo",
+        "ingrediente_base": "pollo",
+        "presentacion": "paquete",
+        "contenido": 1000,
+        "unidad_contenido": "g",
+        "precio": 44.90,
+        "url": "https://alsuper.com/producto/caderita-de-pollo-44400"
     },
 
-    # RES
     {
+        "id": "alsuper_pollo_alas",
         "tienda": "Alsuper",
-        "categoria": "Res",
-        "nombre_referencia": "Pata de Res",
-        "presentacion": "Pata de res",
-        "url": "https://alsuper.com/producto/pata-de-res-9216",
-        "precio_respaldo": 109.90,
-    },
-    {
-        "tienda": "Alsuper",
-        "categoria": "Res",
-        "nombre_referencia": "Puchero de Res",
-        "presentacion": "Puchero de res",
-        "url": "https://alsuper.com/producto/puchero-de-res-14038",
-        "precio_respaldo": 259.90,
-    },
-    {
-        "tienda": "Alsuper",
-        "categoria": "Res",
-        "nombre_referencia": "Carne para Jugo",
-        "presentacion": "Carne para jugo",
-        "url": "https://alsuper.com/producto/carne-para-jugo-421810",
-        "precio_respaldo": 319.90,
-    },
-    {
-        "tienda": "Alsuper",
-        "categoria": "Res",
-        "nombre_referencia": "Sábana de Res",
-        "presentacion": "Sábana de res",
-        "url": "https://alsuper.com/producto/sabana-de-res-497606",
-        "precio_respaldo": 169.90,
+        "nombre": "Alas de pollo",
+        "categoria": "pollo",
+        "ingrediente_base": "pollo",
+        "presentacion": "paquete",
+        "contenido": 1000,
+        "unidad_contenido": "g",
+        "precio": 114.90,
+        "url": "https://alsuper.com/producto/ala-pollo-352077"
     },
 
-    # PUERCO
     {
+        "id": "alsuper_res_puchero",
         "tienda": "Alsuper",
-        "categoria": "Puerco",
-        "nombre_referencia": "Filete de Cerdo",
-        "presentacion": "Filete de cerdo",
-        "url": "https://alsuper.com/producto/filete-de-cerdo-371873",
-        "precio_respaldo": 154.90,
-    },
-    {
-        "tienda": "Alsuper",
-        "categoria": "Puerco",
-        "nombre_referencia": "Molida de Puerco",
-        "presentacion": "Carne molida de puerco",
-        "url": "https://alsuper.com/producto/molida-de-puerco-13817",
-        "precio_respaldo": 114.90,
-    },
-    {
-        "tienda": "Alsuper",
-        "categoria": "Puerco",
-        "nombre_referencia": "Milanesa de Puerco",
-        "presentacion": "Milanesa de puerco",
-        "url": "https://alsuper.com/producto/milanesa-de-puerco-3405",
-        "precio_respaldo": 114.90,
-    },
-    {
-        "tienda": "Alsuper",
-        "categoria": "Puerco",
-        "nombre_referencia": "Carne de Cerdo para Disco",
-        "presentacion": "Carne de cerdo para disco",
-        "url": "https://alsuper.com/producto/carne-de-cerdo-para-disco-406195",
-        "precio_respaldo": 119.90,
+        "nombre": "Carne de res para puchero",
+        "categoria": "res",
+        "ingrediente_base": "res",
+        "presentacion": "paquete",
+        "contenido": 1000,
+        "unidad_contenido": "g",
+        "precio": 259.90,
+        "url": "https://alsuper.com/producto/puchero-res-14038"
     },
 
-    # PESCADO
     {
+        "id": "alsuper_res_jugo",
         "tienda": "Alsuper",
-        "categoria": "Pescado",
-        "nombre_referencia": "Pescado Rodajeado",
-        "presentacion": "Pescado rodajeado",
-        "url": "https://alsuper.com/producto/pescado-rodajeado-391892",
-        "precio_respaldo": 84.90,
-    },
-    {
-        "tienda": "Alsuper",
-        "categoria": "Pescado",
-        "nombre_referencia": "Filete de Bagre Basa",
-        "presentacion": "Filete de bagre basa",
-        "url": "https://alsuper.com/producto/filete-de-bagre-basa-3834",
-        "precio_respaldo": 84.90,
-    },
-    {
-        "tienda": "Alsuper",
-        "categoria": "Pescado",
-        "nombre_referencia": "Filete de Pescado Finas Hierbas",
-        "presentacion": "Filete de pescado con finas hierbas",
-        "url": "https://alsuper.com/producto/filete-de-pescado-finas-hierbas-369673",
-        "precio_respaldo": 129.90,
-    },
-    {
-        "tienda": "Alsuper",
-        "categoria": "Pescado",
-        "nombre_referencia": "Filete de Pescado Pimienta Limón",
-        "presentacion": "Filete de pescado pimienta limón 500 g",
-        "url": "https://alsuper.com/producto/filete-de-pescado-pimienta-limon-352746",
-        "precio_respaldo": 139.90,
+        "nombre": "Carne de res para jugo",
+        "categoria": "res",
+        "ingrediente_base": "res",
+        "presentacion": "paquete",
+        "contenido": 1000,
+        "unidad_contenido": "g",
+        "precio": 319.90,
+        "url": "https://alsuper.com/producto/carne-para-jugo-421810"
     },
 
-    # HUEVO
     {
+        "id": "alsuper_res_sabana",
         "tienda": "Alsuper",
-        "categoria": "Huevo",
-        "nombre_referencia": "Huevo Blanco San Juan",
-        "presentacion": "12 piezas",
-        "url": "https://alsuper.com/producto/huevo-blanco-12-piezas-322894",
-        "precio_respaldo": 32.90,
-    },
-    {
-        "tienda": "Alsuper",
-        "categoria": "Huevo",
-        "nombre_referencia": "Huevo Blanco MyBrand",
-        "presentacion": "12 piezas",
-        "url": "https://alsuper.com/producto/huevo-blanco-12-piezas-409497",
-        "precio_respaldo": 29.90,
+        "nombre": "Sábana de res",
+        "categoria": "res",
+        "ingrediente_base": "res",
+        "presentacion": "paquete",
+        "contenido": 1000,
+        "unidad_contenido": "g",
+        "precio": 169.90,
+        "url": "https://alsuper.com/producto/sabana-497606"
     },
 
-    # ATÚN
     {
+        "id": "alsuper_cerdo_filete",
         "tienda": "Alsuper",
-        "categoria": "Atún",
-        "nombre_referencia": "Atún El Dorado en Agua",
-        "presentacion": "130 g",
-        "url": "https://alsuper.com/producto/atun-449782",
-        "precio_respaldo": 12.90,
-    },
-    {
-        "tienda": "Alsuper",
-        "categoria": "Atún",
-        "nombre_referencia": "Atún Mazatún en Agua",
-        "presentacion": "130 g",
-        "url": "https://alsuper.com/producto/atun-446574",
-        "precio_respaldo": 18.90,
-    },
-    {
-        "tienda": "Alsuper",
-        "categoria": "Atún",
-        "nombre_referencia": "Atún Dolores en Agua",
-        "presentacion": "130 g",
-        "url": "https://alsuper.com/producto/atun--455238",
-        "precio_respaldo": 19.90,
+        "nombre": "Filete de cerdo",
+        "categoria": "cerdo",
+        "ingrediente_base": "cerdo",
+        "presentacion": "paquete",
+        "contenido": 1000,
+        "unidad_contenido": "g",
+        "precio": 154.90,
+        "url": "https://alsuper.com/producto/filete-cerdo-371873"
     },
 
-    # ARROZ
     {
+        "id": "alsuper_cerdo_molida",
         "tienda": "Alsuper",
-        "categoria": "Despensa",
-        "nombre_referencia": "Arroz Cazerola",
-        "presentacion": "907 g",
-        "url": "https://alsuper.com/producto/arroz-379848",
-        "precio_respaldo": 22.90,
-    },
-    {
-        "tienda": "Alsuper",
-        "categoria": "Despensa",
-        "nombre_referencia": "Arroz Largo SOS",
-        "presentacion": "907 g",
-        "url": "https://alsuper.com/producto/arroz-largo-388114",
-        "precio_respaldo": 29.90,
+        "nombre": "Carne molida de puerco",
+        "categoria": "cerdo",
+        "ingrediente_base": "cerdo",
+        "presentacion": "paquete",
+        "contenido": 1000,
+        "unidad_contenido": "g",
+        "precio": 114.90,
+        "url": "https://alsuper.com/producto/molida-puerco-13817"
     },
 
-    # FRIJOL
     {
+        "id": "alsuper_cerdo_milanesa",
         "tienda": "Alsuper",
-        "categoria": "Despensa",
-        "nombre_referencia": "Frijol Pinto Alsuper",
-        "presentacion": "1 kg",
-        "url": "https://alsuper.com/producto/frijol-pinto-409",
-        "precio_respaldo": 24.90,
-    },
-    {
-        "tienda": "Alsuper",
-        "categoria": "Despensa",
-        "nombre_referencia": "Frijol Pinto Cazerola",
-        "presentacion": "907 g",
-        "url": "https://alsuper.com/producto/frijol-pinto-379849",
-        "precio_respaldo": 24.90,
+        "nombre": "Milanesa de puerco",
+        "categoria": "cerdo",
+        "ingrediente_base": "cerdo",
+        "presentacion": "paquete",
+        "contenido": 1000,
+        "unidad_contenido": "g",
+        "precio": 114.90,
+        "url": "https://alsuper.com/producto/milanesa-puerco-3405"
     },
 
-    # TORTILLA
     {
+        "id": "alsuper_pescado",
         "tienda": "Alsuper",
-        "categoria": "Despensa",
-        "nombre_referencia": "Tortilla de Maíz Alsuper",
-        "presentacion": "500 g",
-        "url": "https://alsuper.com/producto/tortilla-de-maiz-380479",
-        "precio_respaldo": 17.90,
-    },
-    {
-        "tienda": "Alsuper",
-        "categoria": "Despensa",
-        "nombre_referencia": "Tortilla de Maíz Alsuper",
-        "presentacion": "1 kg",
-        "url": "https://alsuper.com/producto/tortilla-de-maiz-380477",
-        "precio_respaldo": 25.90,
+        "nombre": "Pescado rodajeado",
+        "categoria": "pescado",
+        "ingrediente_base": "pescado",
+        "presentacion": "paquete",
+        "contenido": 1000,
+        "unidad_contenido": "g",
+        "precio": 84.90,
+        "url": "https://alsuper.com/producto/pescado-rodajeado-391892"
     },
 
-    # VERDURAS
     {
+        "id": "alsuper_basa",
         "tienda": "Alsuper",
-        "categoria": "Verdura",
-        "nombre_referencia": "Papa Morena",
-        "presentacion": "1 kg",
-        "url": "https://alsuper.com/producto/papa-morena-6",
-        "precio_respaldo": 13.90,
-    },
-    {
-        "tienda": "Alsuper",
-        "categoria": "Verdura",
-        "nombre_referencia": "Tomate Bola",
-        "presentacion": "1 kg",
-        "url": "https://alsuper.com/producto/tomate-2",
-        "precio_respaldo": 29.90,
-    },
-    {
-        "tienda": "Alsuper",
-        "categoria": "Verdura",
-        "nombre_referencia": "Tomate Saladet",
-        "presentacion": "1 kg",
-        "url": "https://alsuper.com/producto/tomate-saladet-98",
-        "precio_respaldo": 29.90,
-    },
-    {
-        "tienda": "Alsuper",
-        "categoria": "Verdura",
-        "nombre_referencia": "Cebolla Blanca",
-        "presentacion": "1 kg",
-        "url": "https://alsuper.com/producto/cebolla-blanca-9",
-        "precio_respaldo": 49.90,
-    },
-    {
-        "tienda": "Alsuper",
-        "categoria": "Verdura",
-        "nombre_referencia": "Brócoli",
-        "presentacion": "1 kg",
-        "url": "https://alsuper.com/producto/brocoli-71",
-        "precio_respaldo": 44.90,
-    },
-    {
-        "tienda": "Alsuper",
-        "categoria": "Verdura",
-        "nombre_referencia": "Pimiento Morrón Rojo",
-        "presentacion": "1 kg",
-        "url": "https://alsuper.com/producto/pimiento-morron-rojo-63",
-        "precio_respaldo": 59.90,
+        "nombre": "Bagre basa",
+        "categoria": "pescado",
+        "ingrediente_base": "pescado",
+        "presentacion": "paquete",
+        "contenido": 1000,
+        "unidad_contenido": "g",
+        "precio": 84.90,
+        "url": "https://alsuper.com/producto/bagre-basa-3834"
     },
 
-    # LÁCTEOS
     {
+        "id": "alsuper_atun_eldorado",
         "tienda": "Alsuper",
-        "categoria": "Lácteo",
-        "nombre_referencia": "Queso Panela Alsuper",
-        "presentacion": "1 kg",
-        "url": "https://alsuper.com/producto/queso-panela-402102",
-        "precio_respaldo": 124.90,
-    },
-    {
-        "tienda": "Alsuper",
-        "categoria": "Lácteo",
-        "nombre_referencia": "Queso Chihuahua Alsuper",
-        "presentacion": "1 kg",
-        "url": "https://alsuper.com/producto/queso-chihuahua-508053",
-        "precio_respaldo": 194.90,
+        "nombre": "Atún El Dorado en agua",
+        "categoria": "atun",
+        "ingrediente_base": "atun",
+        "presentacion": "lata",
+        "contenido": 130,
+        "unidad_contenido": "g",
+        "precio": 12.90,
+        "url": "https://alsuper.com/producto/atun-449782"
     },
 
-    # AJO
     {
+        "id": "alsuper_atun_mazatun",
         "tienda": "Alsuper",
-        "categoria": "Despensa",
-        "nombre_referencia": "Ajo Extra",
-        "presentacion": "1 kg",
-        "url": "https://alsuper.com/producto/ajo-extra-80",
-        "precio_respaldo": 189.90,
+        "nombre": "Atún Mazatún en agua",
+        "categoria": "atun",
+        "ingrediente_base": "atun",
+        "presentacion": "lata",
+        "contenido": 130,
+        "unidad_contenido": "g",
+        "precio": 18.90,
+        "url": "https://alsuper.com/producto/atun-446574"
+    },
+
+    # ---------------- HUEVO ----------------
+
+    {
+        "id": "alsuper_huevo_30_huizache",
+        "tienda": "Alsuper",
+        "nombre": "Huevo Huizache",
+        "categoria": "huevo",
+        "ingrediente_base": "huevo",
+        "presentacion": "charola",
+        "contenido": 30,
+        "unidad_contenido": "pieza",
+        "precio": 66.90,
+        "url": "https://alsuper.com/producto/huevo-huizache-30-394553"
+    },
+
+    {
+        "id": "alsuper_huevo_30_sanjuan",
+        "tienda": "Alsuper",
+        "nombre": "Huevo San Juan",
+        "categoria": "huevo",
+        "ingrediente_base": "huevo",
+        "presentacion": "charola",
+        "contenido": 30,
+        "unidad_contenido": "pieza",
+        "precio": 74.90,
+        "url": "https://alsuper.com/producto/huevo-san-juan-30-323673"
+    },
+
+    {
+        "id": "alsuper_huevo_12",
+        "tienda": "Alsuper",
+        "nombre": "Huevo Huizache",
+        "categoria": "huevo",
+        "ingrediente_base": "huevo",
+        "presentacion": "cartón",
+        "contenido": 12,
+        "unidad_contenido": "pieza",
+        "precio": 29.90,
+        "url": "https://alsuper.com/producto/huevo-12-399988"
+    },
+
+    # ---------------- BÁSICOS ----------------
+
+    {
+        "id": "alsuper_arroz_907",
+        "tienda": "Alsuper",
+        "nombre": "Arroz Cazerola",
+        "categoria": "arroz",
+        "ingrediente_base": "arroz",
+        "presentacion": "bolsa",
+        "contenido": 907,
+        "unidad_contenido": "g",
+        "precio": 22.90,
+        "url": "https://alsuper.com/producto/arroz-379848"
+    },
+
+    {
+        "id": "alsuper_frijol_1kg",
+        "tienda": "Alsuper",
+        "nombre": "Frijol Pinto Alsuper",
+        "categoria": "frijol",
+        "ingrediente_base": "frijol",
+        "presentacion": "bolsa",
+        "contenido": 1000,
+        "unidad_contenido": "g",
+        "precio": 24.90,
+        "url": "https://alsuper.com/producto/frijol-pinto-409"
+    },
+
+    {
+        "id": "alsuper_tortilla_1kg",
+        "tienda": "Alsuper",
+        "nombre": "Tortilla de maíz",
+        "categoria": "tortilla",
+        "ingrediente_base": "tortilla",
+        "presentacion": "paquete",
+        "contenido": 1000,
+        "unidad_contenido": "g",
+        "precio": 25.90,
+        "url": "https://alsuper.com/producto/tortilla-380477"
+    },
+
+    # ---------------- VERDURAS ----------------
+
+    {
+        "id": "alsuper_papa",
+        "tienda": "Alsuper",
+        "nombre": "Papa morena",
+        "categoria": "verdura",
+        "ingrediente_base": "papa",
+        "presentacion": "kilogramo",
+        "contenido": 1000,
+        "unidad_contenido": "g",
+        "precio": 13.90,
+        "url": "https://alsuper.com/producto/papa-morena-6"
+    },
+
+    {
+        "id": "alsuper_tomate",
+        "tienda": "Alsuper",
+        "nombre": "Tomate saladet",
+        "categoria": "verdura",
+        "ingrediente_base": "tomate",
+        "presentacion": "kilogramo",
+        "contenido": 1000,
+        "unidad_contenido": "g",
+        "precio": 29.90,
+        "url": "https://alsuper.com/producto/tomate-saladet-98"
+    },
+
+    {
+        "id": "alsuper_cebolla",
+        "tienda": "Alsuper",
+        "nombre": "Cebolla",
+        "categoria": "verdura",
+        "ingrediente_base": "cebolla",
+        "presentacion": "kilogramo",
+        "contenido": 1000,
+        "unidad_contenido": "g",
+        "precio": 49.90,
+        "url": "https://alsuper.com/producto/cebolla-924"
+    },
+
+    {
+        "id": "alsuper_tomatillo",
+        "tienda": "Alsuper",
+        "nombre": "Tomatillo",
+        "categoria": "verdura",
+        "ingrediente_base": "tomatillo",
+        "presentacion": "kilogramo",
+        "contenido": 1000,
+        "unidad_contenido": "g",
+        "precio": 39.90,
+        "url": "https://alsuper.com/producto/tomatillo-65"
+    },
+
+    {
+        "id": "alsuper_brocoli",
+        "tienda": "Alsuper",
+        "nombre": "Brócoli",
+        "categoria": "verdura",
+        "ingrediente_base": "brocoli",
+        "presentacion": "pieza",
+        "contenido": 1,
+        "unidad_contenido": "pieza",
+        "precio": 44.90,
+        "url": "https://alsuper.com/producto/brocoli-71"
+    },
+
+    # ---------------- QUESO ----------------
+
+    {
+        "id": "alsuper_queso_panela",
+        "tienda": "Alsuper",
+        "nombre": "Queso panela",
+        "categoria": "queso",
+        "ingrediente_base": "queso",
+        "presentacion": "pieza",
+        "contenido": 400,
+        "unidad_contenido": "g",
+        "precio": 124.90,
+        "url": "https://alsuper.com/producto/queso-panela-402102"
     },
 ]
 
-
-# ============================================================
-# WALMART
-# ============================================================
 
 PRODUCTOS_WALMART = [
 
     {
+        "id": "walmart_pollo",
         "tienda": "Walmart",
-        "categoria": "Despensa",
-        "nombre_referencia": "Arroz Great Value Súper Extra",
-        "presentacion": "1 kg",
-        "url": "https://www.walmart.com.mx/ip/Arroz-Great-Value-Super-Extra-1-kg/00750649507086",
-        "precio_respaldo": 15.00,
+        "nombre": "Pollo",
+        "categoria": "pollo",
+        "ingrediente_base": "pollo",
+        "presentacion": "paquete",
+        "contenido": 1000,
+        "unidad_contenido": "g",
+        "precio": 67.00,
+        "url": "https://www.walmart.com.mx/"
     },
+
     {
+        "id": "walmart_res",
         "tienda": "Walmart",
-        "categoria": "Despensa",
-        "nombre_referencia": "Frijol Great Value Pinto",
-        "presentacion": "900 g",
-        "url": "https://www.walmart.com.mx/browse/abarrotes/arroz-frijol-y-semillas/frijol/120005_120067_120194",
-        "precio_respaldo": 25.00,
+        "nombre": "Carne de res",
+        "categoria": "res",
+        "ingrediente_base": "res",
+        "presentacion": "paquete",
+        "contenido": 1000,
+        "unidad_contenido": "g",
+        "precio": 180.00,
+        "url": "https://www.walmart.com.mx/"
     },
+
     {
+        "id": "walmart_cerdo",
         "tienda": "Walmart",
-        "categoria": "Despensa",
-        "nombre_referencia": "Frijol Negro Aurrera",
-        "presentacion": "900 g",
-        "url": "https://www.walmart.com.mx/browse/abarrotes/arroz-frijol-y-semillas/frijol/120005_120067_120194",
-        "precio_respaldo": 21.00,
+        "nombre": "Carne de cerdo",
+        "categoria": "cerdo",
+        "ingrediente_base": "cerdo",
+        "presentacion": "paquete",
+        "contenido": 1000,
+        "unidad_contenido": "g",
+        "precio": 130.00,
+        "url": "https://www.walmart.com.mx/"
     },
+
     {
+        "id": "walmart_pescado",
         "tienda": "Walmart",
-        "categoria": "Despensa",
-        "nombre_referencia": "Arroz Verde Valle Súper Extra",
-        "presentacion": "1 kg",
-        "url": "https://www.walmart.com.mx/browse/abarrotes/arroz-frijol-y-semillas/arroz/120005_120067_120195",
-        "precio_respaldo": 37.00,
+        "nombre": "Filete de pescado",
+        "categoria": "pescado",
+        "ingrediente_base": "pescado",
+        "presentacion": "paquete",
+        "contenido": 1000,
+        "unidad_contenido": "g",
+        "precio": 120.00,
+        "url": "https://www.walmart.com.mx/"
     },
+
     {
+        "id": "walmart_huevo",
         "tienda": "Walmart",
-        "categoria": "Despensa",
-        "nombre_referencia": "Arroz Schettino Súper Extra",
-        "presentacion": "907 g",
-        "url": "https://www.walmart.com.mx/browse/abarrotes/arroz-frijol-y-semillas/arroz/120005_120067_120195",
-        "precio_respaldo": 19.00,
+        "nombre": "Huevo",
+        "categoria": "huevo",
+        "ingrediente_base": "huevo",
+        "presentacion": "cartón",
+        "contenido": 30,
+        "unidad_contenido": "pieza",
+        "precio": 75.00,
+        "url": "https://www.walmart.com.mx/"
     },
+
     {
+        "id": "walmart_arroz",
         "tienda": "Walmart",
-        "categoria": "Despensa",
-        "nombre_referencia": "Arroz Italriso Súper Extra",
-        "presentacion": "900 g",
-        "url": "https://www.walmart.com.mx/browse/abarrotes/arroz-frijol-y-semillas/arroz/120005_120067_120195",
-        "precio_respaldo": 20.00,
+        "nombre": "Arroz Great Value",
+        "categoria": "arroz",
+        "ingrediente_base": "arroz",
+        "presentacion": "bolsa",
+        "contenido": 1000,
+        "unidad_contenido": "g",
+        "precio": 15.00,
+        "url": "https://www.walmart.com.mx/"
     },
+
     {
+        "id": "walmart_frijol",
         "tienda": "Walmart",
-        "categoria": "Despensa",
-        "nombre_referencia": "Arroz La Merced",
-        "presentacion": "907 g",
-        "url": "https://www.walmart.com.mx/browse/abarrotes/arroz-frijol-y-semillas/arroz/120005_120067_120195",
-        "precio_respaldo": 21.00,
+        "nombre": "Frijol Pinto Great Value",
+        "categoria": "frijol",
+        "ingrediente_base": "frijol",
+        "presentacion": "bolsa",
+        "contenido": 900,
+        "unidad_contenido": "g",
+        "precio": 25.00,
+        "url": "https://www.walmart.com.mx/"
     },
+
     {
+        "id": "walmart_atun",
         "tienda": "Walmart",
-        "categoria": "Despensa",
-        "nombre_referencia": "Lentejas Verde Valle",
-        "presentacion": "500 g",
-        "url": "https://www.walmart.com.mx/content/abarrotes/arroz-frijol-y-semillas/120005_120067",
-        "precio_respaldo": 20.00,
+        "nombre": "Atún Great Value en agua",
+        "categoria": "atun",
+        "ingrediente_base": "atun",
+        "presentacion": "lata",
+        "contenido": 140,
+        "unidad_contenido": "g",
+        "precio": 17.00,
+        "url": "https://www.walmart.com.mx/"
     },
+
     {
+        "id": "walmart_tortilla",
         "tienda": "Walmart",
-        "categoria": "Atún",
-        "nombre_referencia": "Atún",
-        "presentacion": "Lata",
-        "url": "https://www.walmart.com.mx/browse/abarrotes/enlatados-y-conservas/atunes/120005_120069_120189",
-        "precio_respaldo": 24.00,
+        "nombre": "Tortilla de maíz",
+        "categoria": "tortilla",
+        "ingrediente_base": "tortilla",
+        "presentacion": "paquete",
+        "contenido": 1000,
+        "unidad_contenido": "g",
+        "precio": 25.00,
+        "url": "https://www.walmart.com.mx/"
+    },
+
+    {
+        "id": "walmart_papa",
+        "tienda": "Walmart",
+        "nombre": "Papa",
+        "categoria": "verdura",
+        "ingrediente_base": "papa",
+        "presentacion": "kilogramo",
+        "contenido": 1000,
+        "unidad_contenido": "g",
+        "precio": 25.00,
+        "url": "https://www.walmart.com.mx/"
+    },
+
+    {
+        "id": "walmart_tomate",
+        "tienda": "Walmart",
+        "nombre": "Tomate",
+        "categoria": "verdura",
+        "ingrediente_base": "tomate",
+        "presentacion": "kilogramo",
+        "contenido": 1000,
+        "unidad_contenido": "g",
+        "precio": 35.00,
+        "url": "https://www.walmart.com.mx/"
+    },
+
+    {
+        "id": "walmart_cebolla",
+        "tienda": "Walmart",
+        "nombre": "Cebolla",
+        "categoria": "verdura",
+        "ingrediente_base": "cebolla",
+        "presentacion": "kilogramo",
+        "contenido": 1000,
+        "unidad_contenido": "g",
+        "precio": 35.00,
+        "url": "https://www.walmart.com.mx/"
     },
 ]
 
-
-# ============================================================
-# BODEGA AURRERÁ
-# ============================================================
-
-PRODUCTOS_AURRERA = [
-
-    {
-        "tienda": "Bodega Aurrerá",
-        "categoria": "Atún",
-        "nombre_referencia": "Atún Dolores Aleta Amarilla",
-        "presentacion": "140 g",
-        "url": "https://despensa.bodegaaurrera.com.mx/content/despensa-y-abarrotes/06",
-        "precio_respaldo": 21.00,
-    },
-    {
-        "tienda": "Bodega Aurrerá",
-        "categoria": "Atún",
-        "nombre_referencia": "Atún Dolores Aleta Amarilla",
-        "presentacion": "295 g",
-        "url": "https://despensa.bodegaaurrera.com.mx/content/despensa-y-abarrotes/06",
-        "precio_respaldo": 42.00,
-    },
-    {
-        "tienda": "Bodega Aurrerá",
-        "categoria": "Atún",
-        "nombre_referencia": "Atún Tuny Clásico",
-        "presentacion": "140 g",
-        "url": "https://despensa.bodegaaurrera.com.mx/content/despensa-y-abarrotes/06",
-        "precio_respaldo": 22.00,
-    },
-    {
-        "tienda": "Bodega Aurrerá",
-        "categoria": "Despensa",
-        "nombre_referencia": "Arroz Great Value",
-        "presentacion": "900 g",
-        "url": "https://www.bodegaaurrera.com.mx/content/abarrotes/arroz-frijol-y-semillas/120005_120067",
-        "precio_respaldo": 24.00,
-    },
-    {
-        "tienda": "Bodega Aurrerá",
-        "categoria": "Despensa",
-        "nombre_referencia": "Frijol Great Value Pinto",
-        "presentacion": "900 g",
-        "url": "https://www.bodegaaurrera.com.mx/content/abarrotes/arroz-frijol-y-semillas/120005_120067",
-        "precio_respaldo": 32.00,
-    },
-    {
-        "tienda": "Bodega Aurrerá",
-        "categoria": "Despensa",
-        "nombre_referencia": "Garbanzo Great Value",
-        "presentacion": "500 g",
-        "url": "https://www.bodegaaurrera.com.mx/content/abarrotes/arroz-frijol-y-semillas/120005_120067",
-        "precio_respaldo": 35.00,
-    },
-]
-
-
-# ============================================================
-# SORIANA
-#
-# Se incluyen categorías oficiales como respaldo cuando la
-# tienda no entrega fácilmente una URL individual.
-# ============================================================
 
 PRODUCTOS_SORIANA = [
 
     {
+        "id": "soriana_pollo",
         "tienda": "Soriana",
-        "categoria": "Despensa",
-        "nombre_referencia": "Arroz",
-        "presentacion": "Presentación disponible en tienda",
-        "url": "https://www.soriana.com/despensa/arroz-frijol-y-semillas/arroz/",
-        "precio_respaldo": 25.00,
+        "nombre": "Pollo",
+        "categoria": "pollo",
+        "ingrediente_base": "pollo",
+        "presentacion": "paquete",
+        "contenido": 1000,
+        "unidad_contenido": "g",
+        "precio": 70.00,
+        "url": "https://www.soriana.com/"
     },
+
     {
+        "id": "soriana_res",
         "tienda": "Soriana",
-        "categoria": "Despensa",
-        "nombre_referencia": "Frijol",
-        "presentacion": "Presentación disponible en tienda",
-        "url": "https://www.soriana.com/despensa/arroz-frijol-y-semillas/frijol/",
-        "precio_respaldo": 30.00,
+        "nombre": "Carne de res",
+        "categoria": "res",
+        "ingrediente_base": "res",
+        "presentacion": "paquete",
+        "contenido": 1000,
+        "unidad_contenido": "g",
+        "precio": 190.00,
+        "url": "https://www.soriana.com/"
     },
+
     {
+        "id": "soriana_cerdo",
         "tienda": "Soriana",
-        "categoria": "Atún",
-        "nombre_referencia": "Atún",
-        "presentacion": "Presentación disponible en tienda",
-        "url": "https://www.soriana.com/despensa/enlatados-y-conservas/atunes/",
-        "precio_respaldo": 25.00,
+        "nombre": "Carne de cerdo",
+        "categoria": "cerdo",
+        "ingrediente_base": "cerdo",
+        "presentacion": "paquete",
+        "contenido": 1000,
+        "unidad_contenido": "g",
+        "precio": 135.00,
+        "url": "https://www.soriana.com/"
+    },
+
+    {
+        "id": "soriana_pescado",
+        "tienda": "Soriana",
+        "nombre": "Filete de pescado",
+        "categoria": "pescado",
+        "ingrediente_base": "pescado",
+        "presentacion": "paquete",
+        "contenido": 1000,
+        "unidad_contenido": "g",
+        "precio": 125.00,
+        "url": "https://www.soriana.com/"
+    },
+
+    {
+        "id": "soriana_huevo",
+        "tienda": "Soriana",
+        "nombre": "Huevo",
+        "categoria": "huevo",
+        "ingrediente_base": "huevo",
+        "presentacion": "cartón",
+        "contenido": 30,
+        "unidad_contenido": "pieza",
+        "precio": 78.00,
+        "url": "https://www.soriana.com/"
+    },
+
+    {
+        "id": "soriana_arroz",
+        "tienda": "Soriana",
+        "nombre": "Arroz",
+        "categoria": "arroz",
+        "ingrediente_base": "arroz",
+        "presentacion": "bolsa",
+        "contenido": 900,
+        "unidad_contenido": "g",
+        "precio": 12.90,
+        "url": "https://www.soriana.com/"
+    },
+
+    {
+        "id": "soriana_frijol",
+        "tienda": "Soriana",
+        "nombre": "Frijol",
+        "categoria": "frijol",
+        "ingrediente_base": "frijol",
+        "presentacion": "bolsa",
+        "contenido": 900,
+        "unidad_contenido": "g",
+        "precio": 25.00,
+        "url": "https://www.soriana.com/"
+    },
+
+    {
+        "id": "soriana_atun",
+        "tienda": "Soriana",
+        "nombre": "Atún Dolores en agua",
+        "categoria": "atun",
+        "ingrediente_base": "atun",
+        "presentacion": "lata",
+        "contenido": 140,
+        "unidad_contenido": "g",
+        "precio": 21.50,
+        "url": "https://www.soriana.com/"
+    },
+
+    {
+        "id": "soriana_tortilla",
+        "tienda": "Soriana",
+        "nombre": "Tortilla de maíz",
+        "categoria": "tortilla",
+        "ingrediente_base": "tortilla",
+        "presentacion": "paquete",
+        "contenido": 1000,
+        "unidad_contenido": "g",
+        "precio": 26.00,
+        "url": "https://www.soriana.com/"
+    },
+
+    {
+        "id": "soriana_papa",
+        "tienda": "Soriana",
+        "nombre": "Papa",
+        "categoria": "verdura",
+        "ingrediente_base": "papa",
+        "presentacion": "kilogramo",
+        "contenido": 1000,
+        "unidad_contenido": "g",
+        "precio": 25.00,
+        "url": "https://www.soriana.com/"
+    },
+
+    {
+        "id": "soriana_tomate",
+        "tienda": "Soriana",
+        "nombre": "Tomate",
+        "categoria": "verdura",
+        "ingrediente_base": "tomate",
+        "presentacion": "kilogramo",
+        "contenido": 1000,
+        "unidad_contenido": "g",
+        "precio": 35.00,
+        "url": "https://www.soriana.com/"
+    },
+
+    {
+        "id": "soriana_cebolla",
+        "tienda": "Soriana",
+        "nombre": "Cebolla",
+        "categoria": "verdura",
+        "ingrediente_base": "cebolla",
+        "presentacion": "kilogramo",
+        "contenido": 1000,
+        "unidad_contenido": "g",
+        "precio": 35.00,
+        "url": "https://www.soriana.com/"
     },
 ]
 
 
-TODOS_PRODUCTOS = (
-    PRODUCTOS_ALSUPER
-    + PRODUCTOS_WALMART
-    + PRODUCTOS_SORIANA
-    + PRODUCTOS_AURRERA
-)
+PRODUCTOS_AURRERA = [
+
+    {
+        "id": "aurrera_pollo",
+        "tienda": "Bodega Aurrerá",
+        "nombre": "Pollo",
+        "categoria": "pollo",
+        "ingrediente_base": "pollo",
+        "presentacion": "paquete",
+        "contenido": 1000,
+        "unidad_contenido": "g",
+        "precio": 67.00,
+        "url": "https://www.bodegaaurrera.com.mx/"
+    },
+
+    {
+        "id": "aurrera_res",
+        "tienda": "Bodega Aurrerá",
+        "nombre": "Carne de res",
+        "categoria": "res",
+        "ingrediente_base": "res",
+        "presentacion": "paquete",
+        "contenido": 1000,
+        "unidad_contenido": "g",
+        "precio": 180.00,
+        "url": "https://www.bodegaaurrera.com.mx/"
+    },
+
+    {
+        "id": "aurrera_cerdo",
+        "tienda": "Bodega Aurrerá",
+        "nombre": "Carne de cerdo",
+        "categoria": "cerdo",
+        "ingrediente_base": "cerdo",
+        "presentacion": "paquete",
+        "contenido": 1000,
+        "unidad_contenido": "g",
+        "precio": 130.00,
+        "url": "https://www.bodegaaurrera.com.mx/"
+    },
+
+    {
+        "id": "aurrera_pescado",
+        "tienda": "Bodega Aurrerá",
+        "nombre": "Filete de pescado",
+        "categoria": "pescado",
+        "ingrediente_base": "pescado",
+        "presentacion": "paquete",
+        "contenido": 1000,
+        "unidad_contenido": "g",
+        "precio": 120.00,
+        "url": "https://www.bodegaaurrera.com.mx/"
+    },
+
+    {
+        "id": "aurrera_huevo",
+        "tienda": "Bodega Aurrerá",
+        "nombre": "Huevo Aurrera",
+        "categoria": "huevo",
+        "ingrediente_base": "huevo",
+        "presentacion": "charola",
+        "contenido": 30,
+        "unidad_contenido": "pieza",
+        "precio": 70.00,
+        "url": "https://www.bodegaaurrera.com.mx/"
+    },
+
+    {
+        "id": "aurrera_arroz",
+        "tienda": "Bodega Aurrerá",
+        "nombre": "Arroz Aurrera",
+        "categoria": "arroz",
+        "ingrediente_base": "arroz",
+        "presentacion": "bolsa",
+        "contenido": 900,
+        "unidad_contenido": "g",
+        "precio": 14.00,
+        "url": "https://www.bodegaaurrera.com.mx/"
+    },
+
+    {
+        "id": "aurrera_frijol",
+        "tienda": "Bodega Aurrerá",
+        "nombre": "Frijol",
+        "categoria": "frijol",
+        "ingrediente_base": "frijol",
+        "presentacion": "bolsa",
+        "contenido": 900,
+        "unidad_contenido": "g",
+        "precio": 25.00,
+        "url": "https://www.bodegaaurrera.com.mx/"
+    },
+
+    {
+        "id": "aurrera_atun",
+        "tienda": "Bodega Aurrerá",
+        "nombre": "Atún Aurrera en agua",
+        "categoria": "atun",
+        "ingrediente_base": "atun",
+        "presentacion": "lata",
+        "contenido": 130,
+        "unidad_contenido": "g",
+        "precio": 10.00,
+        "url": "https://www.bodegaaurrera.com.mx/"
+    },
+
+    {
+        "id": "aurrera_sardinas",
+        "tienda": "Bodega Aurrerá",
+        "nombre": "Sardinas Guaymex",
+        "categoria": "sardinas",
+        "ingrediente_base": "sardinas",
+        "presentacion": "lata",
+        "contenido": 425,
+        "unidad_contenido": "g",
+        "precio": 47.00,
+        "url": "https://www.bodegaaurrera.com.mx/"
+    },
+
+    {
+        "id": "aurrera_tortilla",
+        "tienda": "Bodega Aurrerá",
+        "nombre": "Tortilla de maíz",
+        "categoria": "tortilla",
+        "ingrediente_base": "tortilla",
+        "presentacion": "paquete",
+        "contenido": 1000,
+        "unidad_contenido": "g",
+        "precio": 25.00,
+        "url": "https://www.bodegaaurrera.com.mx/"
+    },
+
+    {
+        "id": "aurrera_papa",
+        "tienda": "Bodega Aurrerá",
+        "nombre": "Papa",
+        "categoria": "verdura",
+        "ingrediente_base": "papa",
+        "presentacion": "kilogramo",
+        "contenido": 1000,
+        "unidad_contenido": "g",
+        "precio": 25.00,
+        "url": "https://www.bodegaaurrera.com.mx/"
+    },
+
+    {
+        "id": "aurrera_tomate",
+        "tienda": "Bodega Aurrerá",
+        "nombre": "Tomate",
+        "categoria": "verdura",
+        "ingrediente_base": "tomate",
+        "presentacion": "kilogramo",
+        "contenido": 1000,
+        "unidad_contenido": "g",
+        "precio": 35.00,
+        "url": "https://www.bodegaaurrera.com.mx/"
+    },
+
+    {
+        "id": "aurrera_cebolla",
+        "tienda": "Bodega Aurrerá",
+        "nombre": "Cebolla",
+        "categoria": "verdura",
+        "ingrediente_base": "cebolla",
+        "presentacion": "kilogramo",
+        "contenido": 1000,
+        "unidad_contenido": "g",
+        "precio": 35.00,
+        "url": "https://www.bodegaaurrera.com.mx/"
+    },
+]
 
 
 # ============================================================
-# DESCARGAR PÁGINA
+# CATÁLOGO
 # ============================================================
 
-@st.cache_data(ttl=900, show_spinner=False)
-def obtener_pagina(url):
-
-    try:
-        respuesta = requests.get(
-            url,
-            headers=HEADERS,
-            timeout=15,
-        )
-
-        respuesta.raise_for_status()
-
-        return respuesta.text
-
-    except Exception:
-        return None
-
-
-# ============================================================
-# PRECIO
-# ============================================================
-
-def convertir_precio(valor):
-
-    if valor is None:
-        return None
-
-    texto = str(valor)
-
-    texto = (
-        texto
-        .replace("$", "")
-        .replace(",", "")
-        .replace("MXN", "")
-        .replace("mxn", "")
-        .strip()
-    )
-
-    match = re.search(
-        r"(\d+(?:\.\d{1,2})?)",
-        texto,
-    )
-
-    if not match:
-        return None
-
-    try:
-        precio = float(match.group(1))
-
-        if 0 < precio < 10000:
-            return precio
-
-    except Exception:
-        pass
-
-    return None
-
-
-def extraer_precio_de_html(soup):
-
-    precios = []
-
-    # JSON-LD
-    scripts = soup.find_all(
-        "script",
-        type="application/ld+json",
-    )
-
-    for script in scripts:
-
-        contenido = script.string
-
-        if not contenido:
-            continue
-
-        encontrados = re.findall(
-            r'"price"\s*:\s*"?'
-            r'(?:MXN\s*)?'
-            r'([0-9]+(?:\.[0-9]{1,2})?)',
-            contenido,
-            flags=re.IGNORECASE,
-        )
-
-        for valor in encontrados:
-
-            precio = convertir_precio(valor)
-
-            if precio:
-                precios.append(precio)
-
-    # META
-    metas = [
-        soup.find(
-            "meta",
-            property="product:price:amount",
-        ),
-        soup.find(
-            "meta",
-            attrs={"itemprop": "price"},
-        ),
-    ]
-
-    for meta in metas:
-
-        if not meta:
-            continue
-
-        precio = convertir_precio(
-            meta.get("content")
-        )
-
-        if precio:
-            precios.append(precio)
-
-    # ITEMPROP
-    elementos = soup.find_all(
-        attrs={"itemprop": "price"}
-    )
-
-    for elemento in elementos:
-
-        precio = convertir_precio(
-            elemento.get("content")
-            or elemento.get_text(
-                " ",
-                strip=True,
-            )
-        )
-
-        if precio:
-            precios.append(precio)
-
-    # TEXTO
-    texto = soup.get_text(
-        " ",
-        strip=True,
-    )
-
-    encontrados = re.findall(
-        r"\$\s*"
-        r"([0-9]{1,5}"
-        r"(?:\.[0-9]{1,2})?)",
-        texto,
-    )
-
-    for valor in encontrados:
-
-        precio = convertir_precio(valor)
-
-        if precio:
-            precios.append(precio)
-
-    precios = [
-        p for p in precios
-        if 0 < p < 10000
-    ]
-
-    if not precios:
-        return None
-
-    return precios[0]
-
-
-# ============================================================
-# EXTRAER PRODUCTO
-# ============================================================
-
-def extraer_producto(item):
-
-    html_pagina = obtener_pagina(
-        item["url"]
-    )
-
-    nombre = item.get(
-        "nombre_referencia",
-        "Producto",
-    )
-
-    descripcion = item.get(
-        "presentacion",
-        "",
-    )
-
-    precio = None
-    fuente = "respaldo"
-
-    if html_pagina:
-
-        soup = BeautifulSoup(
-            html_pagina,
-            "html.parser",
-        )
-
-        # Nombre
-        h1 = soup.find("h1")
-
-        if h1:
-
-            nombre_extraido = h1.get_text(
-                " ",
-                strip=True,
-            )
-
-            if nombre_extraido:
-                nombre = nombre_extraido
-
-        if not nombre:
-
-            meta = soup.find(
-                "meta",
-                property="og:title",
-            )
-
-            if meta:
-                nombre = meta.get(
-                    "content",
-                    nombre,
-                )
-
-        # Descripción
-        meta_description = soup.find(
-            "meta",
-            attrs={"name": "description"},
-        )
-
-        if meta_description:
-
-            descripcion = meta_description.get(
-                "content",
-                descripcion,
-            )
-
-        # Precio
-        precio = extraer_precio_de_html(
-            soup
-        )
-
-        if precio is not None:
-            fuente = "en línea"
-
-    # Respaldo
-    if precio is None:
-
-        precio_respaldo = item.get(
-            "precio_respaldo"
-        )
-
-        if precio_respaldo:
-            precio = float(
-                precio_respaldo
-            )
-
-    if precio is None:
-        return None
-
-    return {
-        "tienda": item["tienda"],
-        "nombre": nombre,
-        "descripcion": descripcion,
-        "precio": round(precio, 2),
-        "categoria": item["categoria"],
-        "url": item["url"],
-        "fuente_precio": fuente,
-    }
-
-
-# ============================================================
-# CATÁLOGO DE UNA TIENDA
-# ============================================================
-
-@st.cache_data(ttl=900, show_spinner=False)
-def crear_catalogo_tienda(nombre_tienda):
-
-    productos = [
-        p
-        for p in TODOS_PRODUCTOS
-        if p["tienda"] == nombre_tienda
-    ]
-
+CATALOGOS = {
+    "Alsuper": PRODUCTOS_ALSUPER,
+    "Walmart": PRODUCTOS_WALMART,
+    "Soriana": PRODUCTOS_SORIANA,
+    "Bodega Aurrerá": PRODUCTOS_AURRERA,
+}
+
+
+def crear_catalogo_tienda(tiendas):
     catalogo = []
 
-    for item in productos:
+    for tienda in tiendas:
+        catalogo.extend(CATALOGOS.get(tienda, []))
 
-        producto = extraer_producto(
-            item
-        )
-
-        if producto:
-            catalogo.append(
-                producto
-            )
-
-    # No duplicar
-    resultado = []
-    vistos = set()
-
+    # Eliminar duplicados
+    resultado = {}
     for producto in catalogo:
+        resultado[producto["id"]] = producto
 
-        clave = (
-            producto["tienda"].lower()
-            + "|"
-            + producto["nombre"].lower()
-            + "|"
-            + producto["descripcion"].lower()
-        )
-
-        if clave in vistos:
-            continue
-
-        vistos.add(clave)
-        resultado.append(producto)
-
-    return resultado
+    return list(resultado.values())
 
 
 # ============================================================
-# CREAR CATÁLOGO DE LAS TIENDAS SELECCIONADAS
+# UTILIDADES
 # ============================================================
 
-def crear_catalogo_seleccionado(
-    tiendas,
-):
+def numero_seguro(valor, default=0.0):
+    try:
+        if valor is None:
+            return default
 
-    catalogo = []
+        if isinstance(valor, str):
+            valor = valor.replace("$", "").replace(",", "").strip()
 
-    progreso = st.progress(
-        0,
-        text="Preparando catálogos...",
-    )
+        return float(valor)
+    except Exception:
+        return default
 
-    total = len(tiendas)
 
-    for i, tienda in enumerate(tiendas):
+def entero_seguro(valor, default=0):
+    try:
+        return int(float(valor))
+    except Exception:
+        return default
 
-        progreso.progress(
-            int(
-                (i / max(total, 1)) * 100
-            ),
-            text=(
-                f"Consultando {tienda}..."
-            ),
-        )
 
-        productos = crear_catalogo_tienda(
-            tienda
-        )
+def limpiar_texto(valor):
+    if valor is None:
+        return ""
 
-        catalogo.extend(
-            productos
-        )
+    return str(valor).strip()
 
-    progreso.progress(
-        100,
-        text="Catálogos listos.",
-    )
 
-    progreso.empty()
-
-    return catalogo
+def escapar_pdf(texto):
+    return html.escape(str(texto))
 
 
 # ============================================================
 # GROQ
 # ============================================================
 
-groq_key = st.secrets.get(
-    "GROQ_API_KEY",
-    "",
-)
-
-if not groq_key:
-
-    groq_key = st.text_input(
-        "🔑 Ingresa tu Groq API Key:",
-        type="password",
-    )
-
-client = None
-
-if groq_key:
+def obtener_cliente_groq():
+    api_key = None
 
     try:
+        api_key = st.secrets.get("GROQ_API_KEY")
+    except Exception:
+        pass
 
-        client = Groq(
-            api_key=groq_key.strip()
+    if not api_key:
+        api_key = st.session_state.get("groq_api_key")
+
+    if not api_key:
+        api_key = st.text_input(
+            "🔑 Ingresa tu GROQ API Key",
+            type="password"
         )
 
+        if api_key:
+            st.session_state["groq_api_key"] = api_key
+
+    if not api_key:
+        return None
+
+    try:
+        return Groq(api_key=api_key)
     except Exception as e:
-
-        st.error(
-            f"Error al inicializar Groq: {e}"
-        )
+        st.error(f"No se pudo inicializar Groq: {e}")
+        return None
 
 
-# ============================================================
-# INTERFAZ
-# ============================================================
-
-col1, col2 = st.columns(2)
-
-
-with col1:
-
-    st.subheader(
-        "🏪 1. Supermercado"
-    )
-
-    alsuper = st.checkbox(
-        "Alsuper",
-        value=True,
-    )
-
-    walmart = st.checkbox(
-        "Walmart",
-        value=False,
-    )
-
-    soriana = st.checkbox(
-        "Soriana",
-        value=False,
-    )
-
-    aurrera = st.checkbox(
-        "Bodega Aurrerá",
-        value=False,
-    )
-
-    dias = st.slider(
-        "Días a planificar:",
-        1,
-        7,
-        6,
-    )
-
-
-with col2:
-
-    st.subheader(
-        "👥 2. Personas y presupuesto"
-    )
-
-    personas = st.slider(
-        "¿Para cuántas personas?",
-        1,
-        10,
-        1,
-    )
-
-    presupuesto = st.number_input(
-        "💰 Presupuesto objetivo (MXN):",
-        min_value=200,
-        max_value=10000,
-        value=600,
-        step=50,
-    )
-
-    st.caption(
-        f"Tolerancia máxima permitida: "
-        f"${TOLERANCIA_PRESUPUESTO:,.2f} "
-        f"adicionales."
-    )
-
-    st.subheader(
-        "🍲 3. Estilos culinarios"
-    )
-
-    est_mex = st.checkbox(
-        "Mexicana Tradicional",
-        value=True,
-    )
-
-    est_nor = st.checkbox(
-        "Regional Norteña",
-        value=True,
-    )
-
-    est_asi = st.checkbox(
-        "Asiática",
-        value=False,
-    )
-
-    est_ita = st.checkbox(
-        "Italiana",
-        value=False,
-    )
-
-    est_fit = st.checkbox(
-        "Saludable / Fitness",
-        value=False,
-    )
-
-    st.subheader(
-        "🍽 4. Tiempos de comida"
-    )
-
-    c_des = st.checkbox(
-        "Desayuno",
-        value=True,
-    )
-
-    c_com = st.checkbox(
-        "Comida",
-        value=True,
-    )
-
-    c_cen = st.checkbox(
-        "Cena",
-        value=True,
-    )
-
-
-# ============================================================
-# RESTRICCIONES
-# ============================================================
-
-st.markdown("---")
-
-st.subheader(
-    "⚡ 5. Herramientas y restricciones"
-)
-
-col3, col4 = st.columns(2)
-
-
-with col3:
-
-    utensilios = st.multiselect(
-        "Aparatos disponibles:",
-        [
-            "Estufa",
-            "Licuadora",
-            "Freidora de aire",
-            "Horno",
-            "Microondas",
-            "Sartén básico",
+def llamar_groq(cliente, prompt, temperatura=0.4):
+    respuesta = cliente.chat.completions.create(
+        model="llama-3.3-70b-versatile",
+        messages=[
+            {
+                "role": "system",
+                "content": (
+                    "Eres KashCook AI, un planificador experto de alimentación "
+                    "familiar, compras y presupuesto. "
+                    "Debes responder exclusivamente con JSON válido cuando se solicite."
+                )
+            },
+            {
+                "role": "user",
+                "content": prompt
+            }
         ],
-        default=[
-            "Estufa",
-            "Sartén básico",
-        ],
+        temperature=temperatura,
+        max_tokens=16000
     )
 
+    return respuesta.choices[0].message.content
 
-with col4:
-
-    restringidos = st.text_input(
-        "Alimentos prohibidos o alergias:",
-        placeholder=(
-            "Ej. cebolla, mariscos, lácteos"
-        ),
-    )
-
-
-# ============================================================
-# LISTAS
-# ============================================================
-
-tiendas_seleccionadas = [
-    tienda
-    for tienda, seleccionada in [
-        ("Alsuper", alsuper),
-        ("Walmart", walmart),
-        ("Soriana", soriana),
-        ("Bodega Aurrerá", aurrera),
-    ]
-    if seleccionada
-]
-
-
-estilos_seleccionados = [
-    estilo
-    for estilo, seleccionada in [
-        ("Mexicana Tradicional", est_mex),
-        ("Regional Norteña", est_nor),
-        ("Asiática", est_asi),
-        ("Italiana", est_ita),
-        ("Saludable / Fitness", est_fit),
-    ]
-    if seleccionada
-]
-
-
-tiempos = [
-    tiempo
-    for tiempo, seleccionada in [
-        ("Desayuno", c_des),
-        ("Comida", c_com),
-        ("Cena", c_cen),
-    ]
-    if seleccionada
-]
-
-
-# ============================================================
-# UTILIDADES JSON
-# ============================================================
 
 def extraer_json(texto):
-
     if not texto:
-        return None
+        raise ValueError("Groq no devolvió contenido.")
 
     texto = texto.strip()
 
     texto = re.sub(
-        r"^```json\s*",
+        r"^```(?:json)?",
         "",
         texto,
-        flags=re.IGNORECASE,
+        flags=re.IGNORECASE
     )
 
     texto = re.sub(
-        r"^```\s*",
+        r"```$",
         "",
-        texto,
+        texto
     )
 
-    texto = re.sub(
-        r"\s*```$",
-        "",
-        texto,
-    )
+    texto = texto.strip()
 
     # Intento directo
     try:
@@ -1198,1002 +1023,994 @@ def extraer_json(texto):
     except Exception:
         pass
 
-    # Buscar primer objeto JSON
+    # Buscar objeto JSON
     inicio = texto.find("{")
-    final = texto.rfind("}")
+    fin = texto.rfind("}")
 
-    if inicio >= 0 and final > inicio:
-
-        candidato = texto[
-            inicio:final + 1
-        ]
+    if inicio != -1 and fin != -1 and fin > inicio:
+        bloque = texto[inicio:fin + 1]
 
         try:
-            return json.loads(
-                candidato
-            )
+            return json.loads(bloque)
         except Exception:
             pass
+
+    raise ValueError("No se pudo interpretar el JSON generado por Groq.")
+
+
+# ============================================================
+# VALIDACIÓN DEL CATÁLOGO
+# ============================================================
+
+def producto_por_id(catalogo):
+    return {
+        producto["id"]: producto
+        for producto in catalogo
+    }
+
+
+# ============================================================
+# CÁLCULO REAL DE COMPRAS
+#
+# Groq indica:
+#
+# cantidad_por_persona
+# unidad
+#
+# Python:
+#
+# cantidad_total = cantidad_por_persona * personas
+#
+# y después:
+#
+# paquetes = ceil(cantidad_total / contenido_presentacion)
+# ============================================================
+
+def normalizar_unidad(unidad):
+    unidad = limpiar_texto(unidad).lower()
+
+    equivalencias = {
+        "gramos": "g",
+        "gramo": "g",
+        "gr": "g",
+        "kgs": "kg",
+        "kilogramos": "kg",
+        "kilogramo": "kg",
+        "litros": "l",
+        "litro": "l",
+        "mililitros": "ml",
+        "mililitro": "ml",
+        "piezas": "pieza",
+        "unidad": "pieza",
+        "unidades": "pieza",
+        "latas": "lata",
+        "lata": "lata",
+    }
+
+    return equivalencias.get(unidad, unidad)
+
+
+def convertir_a_gramos(cantidad, unidad):
+    unidad = normalizar_unidad(unidad)
+
+    if unidad == "kg":
+        return cantidad * 1000
+
+    if unidad == "g":
+        return cantidad
 
     return None
 
 
-def numero_seguro(valor):
+def calcular_compra(plan, catalogo, personas):
+    mapa_productos = producto_por_id(catalogo)
 
-    try:
+    demanda = {}
 
-        if isinstance(valor, str):
+    for dia in plan.get("dias", []):
+        for comida in dia.get("comidas", []):
 
-            valor = (
-                valor
-                .replace("$", "")
-                .replace(",", "")
-                .strip()
+            ingredientes = comida.get("ingredientes", [])
+
+            for ingrediente in ingredientes:
+
+                producto_id = limpiar_texto(
+                    ingrediente.get("producto_id")
+                )
+
+                if not producto_id:
+                    continue
+
+                if producto_id not in mapa_productos:
+                    continue
+
+                producto = mapa_productos[producto_id]
+
+                cantidad_por_persona = numero_seguro(
+                    ingrediente.get("cantidad_por_persona"),
+                    0
+                )
+
+                unidad = normalizar_unidad(
+                    ingrediente.get("unidad", "")
+                )
+
+                if cantidad_por_persona <= 0:
+                    continue
+
+                cantidad_total = cantidad_por_persona * personas
+
+                # -----------------------------------------
+                # Caso gramos / kg
+                # -----------------------------------------
+
+                cantidad_g = convertir_a_gramos(
+                    cantidad_total,
+                    unidad
+                )
+
+                contenido_g = convertir_a_gramos(
+                    numero_seguro(producto["contenido"]),
+                    producto["unidad_contenido"]
+                )
+
+                if cantidad_g is not None and contenido_g is not None:
+
+                    if contenido_g <= 0:
+                        continue
+
+                    cantidad_presentaciones = math.ceil(
+                        cantidad_g / contenido_g
+                    )
+
+                    comprado_g = (
+                        cantidad_presentaciones *
+                        contenido_g
+                    )
+
+                    sobrante_g = max(
+                        0,
+                        comprado_g - cantidad_g
+                    )
+
+                    clave = producto_id
+
+                    if clave not in demanda:
+                        demanda[clave] = {
+                            "producto_id": producto_id,
+                            "producto": producto["nombre"],
+                            "tienda": producto["tienda"],
+                            "presentacion": producto["presentacion"],
+                            "contenido": producto["contenido"],
+                            "unidad_contenido": producto["unidad_contenido"],
+                            "precio_unitario": producto["precio"],
+                            "cantidad_necesaria": 0,
+                            "unidad_necesaria": "g",
+                            "cantidad_comprar": 0,
+                            "sobrante": 0,
+                            "total": 0,
+                        }
+
+                    # Acumulamos demanda, pero las presentaciones
+                    # se redondean AL FINAL.
+                    demanda[clave]["cantidad_necesaria"] += cantidad_g
+
+                # -----------------------------------------
+                # Caso piezas
+                # -----------------------------------------
+
+                elif unidad == "pieza":
+
+                    contenido = numero_seguro(
+                        producto["contenido"]
+                    )
+
+                    if contenido <= 0:
+                        continue
+
+                    cantidad_presentaciones = math.ceil(
+                        cantidad_total / contenido
+                    )
+
+                    clave = producto_id
+
+                    if clave not in demanda:
+                        demanda[clave] = {
+                            "producto_id": producto_id,
+                            "producto": producto["nombre"],
+                            "tienda": producto["tienda"],
+                            "presentacion": producto["presentacion"],
+                            "contenido": producto["contenido"],
+                            "unidad_contenido": producto["unidad_contenido"],
+                            "precio_unitario": producto["precio"],
+                            "cantidad_necesaria": 0,
+                            "unidad_necesaria": "pieza",
+                            "cantidad_comprar": 0,
+                            "sobrante": 0,
+                            "total": 0,
+                        }
+
+                    demanda[clave]["cantidad_necesaria"] += cantidad_total
+
+    # ========================================================
+    # Redondeo FINAL de presentaciones
+    # ========================================================
+
+    compra = []
+
+    for producto_id, item in demanda.items():
+
+        producto = mapa_productos[producto_id]
+
+        contenido = numero_seguro(
+            producto["contenido"]
+        )
+
+        unidad_producto = normalizar_unidad(
+            producto["unidad_contenido"]
+        )
+
+        if item["unidad_necesaria"] == "g":
+
+            contenido_g = convertir_a_gramos(
+                contenido,
+                unidad_producto
             )
 
-        return float(valor)
+            if not contenido_g:
+                continue
 
-    except Exception:
-        return 0.0
+            cantidad_comprar = math.ceil(
+                item["cantidad_necesaria"] / contenido_g
+            )
 
+            comprado = cantidad_comprar * contenido_g
 
-# ============================================================
-# CALCULAR COMPRA
-# ============================================================
+            item["cantidad_comprar"] = cantidad_comprar
+            item["sobrante"] = max(
+                0,
+                comprado - item["cantidad_necesaria"]
+            )
 
-def calcular_compra(
-    plan,
-    catalogo,
-):
+        else:
 
-    mapa = {
-        str(p["id"]): p
-        for p in catalogo
-    }
+            cantidad_comprar = math.ceil(
+                item["cantidad_necesaria"] / contenido
+            )
 
-    compras = []
+            comprado = cantidad_comprar * contenido
 
-    lista_original = plan.get(
-        "shopping_list",
-        [],
+            item["cantidad_comprar"] = cantidad_comprar
+            item["sobrante"] = max(
+                0,
+                comprado - item["cantidad_necesaria"]
+            )
+
+        item["total"] = (
+            item["cantidad_comprar"] *
+            item["precio_unitario"]
+        )
+
+        compra.append(item)
+
+    total = sum(
+        item["total"]
+        for item in compra
     )
 
-    for item in lista_original:
-
-        producto_id = str(
-            item.get(
-                "producto_id",
-                "",
-            )
-        )
-
-        producto = mapa.get(
-            producto_id
-        )
-
-        if not producto:
-            continue
-
-        cantidad = numero_seguro(
-            item.get(
-                "cantidad",
-                1,
-            )
-        )
-
-        if cantidad <= 0:
-            cantidad = 1
-
-        unidad = str(
-            item.get(
-                "unidad",
-                "pieza",
-            )
-        ).strip()
-
-        total = round(
-            cantidad
-            * producto["precio"],
-            2,
-        )
-
-        compras.append(
-            {
-                "producto_id": producto_id,
-                "tienda": producto["tienda"],
-                "producto": producto["nombre"],
-                "descripcion": producto["descripcion"],
-                "cantidad": cantidad,
-                "unidad": unidad,
-                "precio_unitario": producto["precio"],
-                "total": total,
-                "url": producto["url"],
-                "fuente_precio": producto[
-                    "fuente_precio"
-                ],
-            }
-        )
-
-    return compras
-
-
-def total_compra(compras):
-
-    return round(
-        sum(
-            item["total"]
-            for item in compras
-        ),
-        2,
-    )
+    return compra, round(total, 2)
 
 
 # ============================================================
-# NORMALIZAR PLAN
+# VALIDACIÓN DE CANTIDADES
 # ============================================================
 
-def normalizar_plan(
-    plan,
-    catalogo,
+def validar_proteinas(plan, personas):
+    proteinas = []
+
+    for dia in plan.get("dias", []):
+        for comida in dia.get("comidas", []):
+
+            categoria = limpiar_texto(
+                comida.get("categoria_proteina", "")
+            ).lower()
+
+            if categoria:
+                proteinas.append(categoria)
+
+    return proteinas
+
+
+def contar_comidas(plan):
+    total = 0
+
+    for dia in plan.get("dias", []):
+        total += len(dia.get("comidas", []))
+
+    return total
+
+
+# ============================================================
+# PROMPT PRINCIPAL
+# ============================================================
+
+def construir_prompt(
+    personas,
     dias,
-    tiempos,
-):
-
-    if not isinstance(
-        plan,
-        dict,
-    ):
-        return None
-
-    if "days" not in plan:
-        return None
-
-    if not isinstance(
-        plan["days"],
-        list,
-    ):
-        return None
-
-    # IDs para que Groq pueda elegir productos reales
-    for i, producto in enumerate(
-        catalogo,
-        start=1,
-    ):
-        producto["id"] = i
-
-    compras = calcular_compra(
-        plan,
-        catalogo,
-    )
-
-    plan["shopping_list"] = compras
-
-    # Asegurar días
-    plan["days"] = plan["days"][:dias]
-
-    return plan
-
-
-# ============================================================
-# VALIDAR PRESUPUESTO
-# ============================================================
-
-def evaluar_presupuesto(
-    compras,
     presupuesto,
+    estilos,
+    comidas,
+    restricciones,
+    electrodomesticos,
+    catalogo
 ):
 
-    total = total_compra(
-        compras
+    catalogo_resumido = []
+
+    for p in catalogo:
+        catalogo_resumido.append({
+            "id": p["id"],
+            "producto": p["nombre"],
+            "tienda": p["tienda"],
+            "categoria": p["categoria"],
+            "ingrediente_base": p["ingrediente_base"],
+            "presentacion": p["presentacion"],
+            "contenido": p["contenido"],
+            "unidad_contenido": p["unidad_contenido"],
+            "precio": p["precio"]
+        })
+
+    catalogo_json = json.dumps(
+        catalogo_resumido,
+        ensure_ascii=False,
+        indent=2
     )
 
-    limite = (
-        presupuesto
-        + TOLERANCIA_PRESUPUESTO
+    return f"""
+Eres el cerebro culinario de KashCook AI.
+
+Necesito crear un plan de alimentación para:
+
+PERSONAS: {personas}
+DÍAS: {dias}
+PRESUPUESTO OBJETIVO: ${presupuesto:.2f} MXN
+PRESUPUESTO MÁXIMO ABSOLUTO: ${presupuesto + TOLERANCIA_PRESUPUESTO:.2f} MXN
+
+ESTILOS:
+{json.dumps(estilos, ensure_ascii=False)}
+
+COMIDAS:
+{json.dumps(comidas, ensure_ascii=False)}
+
+RESTRICCIONES / ALERGIAS:
+{restricciones}
+
+ELECTRODOMÉSTICOS:
+{json.dumps(electrodomesticos, ensure_ascii=False)}
+
+============================================================
+REGLAS CRÍTICAS
+============================================================
+
+1. El plan es para TODAS las personas indicadas.
+
+2. No hagas recetas para 1 persona y después pretendas
+   que alcance para todos.
+
+3. Las cantidades de ingredientes deben ser POR PERSONA.
+
+4. KashCook multiplicará automáticamente esas cantidades
+   por el número real de personas.
+
+5. NO determines cuántos paquetes comprar.
+   Python hará ese cálculo usando la presentación real.
+
+6. Para proteínas principales utiliza normalmente entre
+   150 y 220 g crudos por persona por comida, dependiendo
+   del plato.
+
+7. Para pescado utiliza aproximadamente 160-220 g por persona.
+
+8. Para carne molida utiliza aproximadamente 150-200 g
+   por persona.
+
+9. Para pollo con hueso puedes utilizar aproximadamente
+   250-350 g por persona debido al hueso.
+
+10. Para atún considera aproximadamente 1 lata de 130-140 g
+    por persona cuando sea plato principal.
+
+11. Para sardinas considera aproximadamente 180-250 g
+    por persona cuando sea plato principal.
+
+12. Para huevo:
+    - desayuno normal: 2-3 piezas por persona
+    - plato principal: 2-3 piezas por persona
+
+13. Arroz seco:
+    aproximadamente 70-100 g por persona como guarnición.
+    Si es plato principal puede llegar a 100-120 g.
+
+14. Frijol seco:
+    aproximadamente 60-90 g por persona como guarnición.
+
+15. Tortillas:
+    aproximadamente 3-5 piezas por persona dependiendo
+    del platillo. Como el catálogo trabaja por gramos,
+    estima aproximadamente 25 g por tortilla.
+
+16. Verduras:
+    utiliza cantidades suficientes para que las comidas
+    sean completas. No pongas cantidades ridículamente bajas.
+
+17. NO diseñes un menú cuyo costo sea artificialmente bajo
+    solamente para ahorrar presupuesto.
+
+18. El presupuesto es un objetivo de alimentación, no una
+    excusa para comprar cantidades insuficientes.
+
+19. Intenta que el costo final calculado por Python quede
+    aproximadamente entre 90% y 100% del presupuesto.
+
+20. Si el presupuesto es alto para la cantidad de personas
+    y días, mejora la calidad, variedad y cantidad razonable
+    de alimentos en lugar de inventar gastos.
+
+21. Si el presupuesto es bajo, prioriza alimentos nutritivos,
+    económicos y rendidores.
+
+22. NUNCA excedas el presupuesto máximo absoluto:
+    ${presupuesto + TOLERANCIA_PRESUPUESTO:.2f}
+
+23. Debes utilizar ÚNICAMENTE productos del catálogo
+    proporcionado.
+
+24. El usuario ya eligió las tiendas.
+    NO compares precios entre tiendas.
+
+25. Si hay varias tiendas seleccionadas, puedes utilizar
+    productos de cualquiera de ellas.
+
+26. NO digas "cómpralo donde sea más barato".
+
+27. Debes utilizar variedad de proteínas:
+    pollo, res, cerdo, pescado, atún, sardinas, huevo,
+    etc., siempre que el número de días lo permita.
+
+28. Evita que todas las comidas tengan pollo.
+
+29. No repitas exactamente el mismo platillo.
+
+30. Respeta estrictamente alergias y restricciones.
+
+31. Las recetas deben ser realistas y las cantidades deben
+    corresponder al número de personas.
+
+============================================================
+CATÁLOGO DISPONIBLE
+============================================================
+
+{catalogo_json}
+
+============================================================
+FORMATO JSON OBLIGATORIO
+============================================================
+
+Devuelve EXCLUSIVAMENTE este formato:
+
+{{
+  "resumen": "breve explicación del plan",
+  "dias": [
+    {{
+      "dia": 1,
+      "comidas": [
+        {{
+          "tipo": "Desayuno",
+          "nombre": "Nombre del platillo",
+          "categoria_proteina": "huevo",
+          "ingredientes": [
+            {{
+              "producto_id": "ID_EXACTO_DEL_CATALOGO",
+              "cantidad_por_persona": 2,
+              "unidad": "pieza",
+              "uso": "huevos"
+            }}
+          ],
+          "preparacion": [
+            "Paso 1",
+            "Paso 2",
+            "Paso 3"
+          ],
+          "tiempo_minutos": 20
+        }}
+      ]
+    }}
+  ]
+}}
+
+IMPORTANTE:
+
+- Cada comida debe tener ingredientes.
+- Cada ingrediente debe usar un producto_id REAL del catálogo.
+- cantidad_por_persona SIEMPRE es para UNA sola persona.
+- No pongas cantidades de compra.
+- No pongas precios.
+- No pongas totales.
+- No inventes productos.
+- No inventes IDs.
+- No agregues productos que no estén en el catálogo.
+
+El JSON debe ser válido.
+"""
+
+
+# ============================================================
+# AJUSTE POR PRESUPUESTO
+# ============================================================
+
+def construir_prompt_ajuste(
+    plan,
+    compra,
+    total,
+    personas,
+    dias,
+    presupuesto,
+    catalogo,
+    motivo
+):
+
+    objetivo_minimo = presupuesto * MIN_UTILIZACION_PRESUPUESTO
+    maximo = presupuesto + TOLERANCIA_PRESUPUESTO
+
+    if motivo == "BAJO":
+        instruccion = f"""
+El plan está dejando demasiado presupuesto sin utilizar.
+
+Costo actual: ${total:.2f}
+Presupuesto: ${presupuesto:.2f}
+Objetivo mínimo aproximado: ${objetivo_minimo:.2f}
+
+Debes mejorar el plan para aprovechar mejor el presupuesto,
+SIN desperdiciar dinero y SIN agregar comidas innecesarias.
+
+Puedes:
+- aumentar razonablemente las porciones,
+- mejorar variedad de proteínas,
+- agregar verduras suficientes,
+- mejorar desayunos,
+- incluir fruta cuando exista en catálogo,
+- utilizar mejores ingredientes disponibles,
+- sustituir algunos platillos por opciones más completas.
+
+NO puedes:
+- agregar productos innecesarios,
+- inventar productos,
+- cambiar número de personas,
+- cambiar número de días,
+- exceder ${maximo:.2f}.
+
+Las cantidades siguen siendo POR PERSONA.
+"""
+
+    else:
+
+        instruccion = f"""
+El plan excede el límite permitido.
+
+Costo actual: ${total:.2f}
+Presupuesto: ${presupuesto:.2f}
+Máximo permitido: ${maximo:.2f}
+
+Debes reducir el costo manteniendo:
+- número de personas,
+- número de días,
+- número de comidas,
+- cantidades nutricionalmente razonables.
+
+Puedes cambiar productos por alternativas económicas
+del catálogo y ajustar recetas.
+
+NO reduzcas las porciones a cantidades absurdamente pequeñas.
+"""
+
+    catalogo_json = json.dumps(
+        catalogo,
+        ensure_ascii=False
     )
 
-    return {
-        "total": total,
-        "presupuesto": float(
-            presupuesto
-        ),
-        "limite": limite,
-        "dentro_objetivo": (
-            total <= presupuesto
-        ),
-        "dentro_tolerancia": (
-            total <= limite
-        ),
-        "diferencia": round(
-            total - presupuesto,
-            2,
-        ),
-    }
+    plan_json = json.dumps(
+        plan,
+        ensure_ascii=False
+    )
+
+    return f"""
+Eres KashCook AI y estás corrigiendo un plan de alimentación.
+
+PERSONAS: {personas}
+DÍAS: {dias}
+
+{instruccion}
+
+CATÁLOGO:
+{catalogo_json}
+
+PLAN ACTUAL:
+{plan_json}
+
+Devuelve exclusivamente el JSON completo del plan corregido,
+usando exactamente la misma estructura:
+
+{{
+  "resumen": "...",
+  "dias": [
+    {{
+      "dia": 1,
+      "comidas": [
+        {{
+          "tipo": "Desayuno",
+          "nombre": "...",
+          "categoria_proteina": "...",
+          "ingredientes": [
+            {{
+              "producto_id": "...",
+              "cantidad_por_persona": 0,
+              "unidad": "...",
+              "uso": "..."
+            }}
+          ],
+          "preparacion": [],
+          "tiempo_minutos": 20
+        }}
+      ]
+    }}
+  ]
+}}
+
+No escribas explicaciones fuera del JSON.
+"""
 
 
 # ============================================================
 # PDF
 # ============================================================
 
-def limpiar_texto_pdf(
-    texto
-):
-
-    if texto is None:
-        return ""
-
-    texto = str(texto)
-
-    texto = html.escape(
-        texto,
-        quote=False,
-    )
-
-    return texto.strip()
-
-
 def generar_pdf(
     plan,
-    dias,
-    personas,
+    compra,
+    total,
     presupuesto,
-    tiendas,
-    evaluacion,
+    personas,
+    dias,
+    tiendas
 ):
 
-    pdf_buffer = io.BytesIO()
+    buffer = io.BytesIO()
 
     doc = SimpleDocTemplate(
-        pdf_buffer,
+        buffer,
         pagesize=letter,
-        rightMargin=36,
-        leftMargin=36,
-        topMargin=40,
-        bottomMargin=40,
-        title="KashCook AI",
-        author="KashCook AI",
+        rightMargin=1.3 * cm,
+        leftMargin=1.3 * cm,
+        topMargin=1.3 * cm,
+        bottomMargin=1.3 * cm
     )
 
     styles = getSampleStyleSheet()
 
-    title_style = ParagraphStyle(
-        "KashTitle",
-        parent=styles["Heading1"],
-        fontName="Helvetica-Bold",
-        fontSize=18,
-        leading=22,
+    titulo = ParagraphStyle(
+        "Titulo",
+        parent=styles["Title"],
         alignment=TA_CENTER,
-        textColor=colors.HexColor(
-            "#1B3B6F"
-        ),
-        spaceAfter=8,
+        fontSize=20,
+        leading=24,
+        spaceAfter=12
     )
 
-    subtitle_style = ParagraphStyle(
-        "KashSubtitle",
-        parent=styles["Normal"],
-        fontName="Helvetica",
+    subtitulo = ParagraphStyle(
+        "Subtitulo",
+        parent=styles["Heading2"],
+        fontSize=13,
+        leading=16,
+        spaceBefore=8,
+        spaceAfter=8
+    )
+
+    normal = ParagraphStyle(
+        "NormalKash",
+        parent=styles["BodyText"],
         fontSize=9,
         leading=12,
-        alignment=TA_CENTER,
-        textColor=colors.HexColor(
-            "#666666"
-        ),
-        spaceAfter=15,
+        spaceAfter=5
     )
 
-    day_style = ParagraphStyle(
-        "Day",
-        parent=styles["Heading1"],
-        fontName="Helvetica-Bold",
-        fontSize=16,
-        leading=20,
-        textColor=colors.white,
-        alignment=TA_CENTER,
-    )
-
-    meal_style = ParagraphStyle(
-        "Meal",
-        parent=styles["Heading2"],
-        fontName="Helvetica-Bold",
-        fontSize=12,
-        leading=15,
-        textColor=colors.HexColor(
-            "#065A82"
-        ),
-        spaceBefore=12,
-        spaceAfter=5,
-    )
-
-    dish_style = ParagraphStyle(
-        "Dish",
-        parent=styles["Heading3"],
-        fontName="Helvetica-Bold",
-        fontSize=11,
-        leading=14,
-        textColor=colors.HexColor(
-            "#222222"
-        ),
-        spaceAfter=6,
-    )
-
-    body_style = ParagraphStyle(
-        "Body",
-        parent=styles["Normal"],
-        fontName="Helvetica",
-        fontSize=9,
-        leading=13,
-        textColor=colors.HexColor(
-            "#222222"
-        ),
-        spaceAfter=4,
-    )
-
-    small_style = ParagraphStyle(
-        "Small",
-        parent=styles["Normal"],
-        fontName="Helvetica",
-        fontSize=8,
-        leading=11,
-        textColor=colors.HexColor(
-            "#555555"
-        ),
-        spaceAfter=4,
-    )
-
-    section_style = ParagraphStyle(
-        "Section",
-        parent=styles["Heading2"],
-        fontName="Helvetica-Bold",
-        fontSize=14,
-        leading=18,
-        textColor=colors.HexColor(
-            "#1B3B6F"
-        ),
-        spaceBefore=12,
-        spaceAfter=8,
-    )
-
-    header_style = ParagraphStyle(
-        "Header",
-        parent=styles["Normal"],
-        fontName="Helvetica-Bold",
-        fontSize=7,
-        leading=9,
-        textColor=colors.white,
-        alignment=TA_CENTER,
-    )
-
-    table_style = ParagraphStyle(
-        "Table",
-        parent=styles["Normal"],
-        fontName="Helvetica",
-        fontSize=7,
-        leading=9,
-        textColor=colors.HexColor(
-            "#222222"
-        ),
+    pequeno = ParagraphStyle(
+        "Pequeno",
+        parent=styles["BodyText"],
+        fontSize=7.5,
+        leading=9.5
     )
 
     story = []
 
-    # --------------------------------------------------------
-    # PORTADA
-    # --------------------------------------------------------
-
     story.append(
         Paragraph(
-            "KASHCOOK AI",
-            title_style,
+            "🍳 KASHCOOK AI",
+            titulo
         )
     )
 
     story.append(
         Paragraph(
-            (
-                f"Plan alimenticio | "
-                f"{dias} días | "
-                f"{personas} persona(s)<br/>"
-                f"Tiendas seleccionadas: "
-                f"{', '.join(tiendas)}<br/>"
-                f"Presupuesto objetivo: "
-                f"${presupuesto:,.2f} MXN"
-            ),
-            subtitle_style,
+            "Plan de alimentación y compras",
+            subtitulo
         )
     )
 
     story.append(
-        HRFlowable(
-            width="100%",
-            thickness=1,
-            color=colors.HexColor(
-                "#065A82"
-            ),
-            spaceAfter=15,
+        Paragraph(
+            f"<b>Personas:</b> {personas} &nbsp;&nbsp; "
+            f"<b>Días:</b> {dias} &nbsp;&nbsp; "
+            f"<b>Presupuesto:</b> ${presupuesto:,.2f}",
+            normal
         )
     )
 
-    # --------------------------------------------------------
-    # DÍAS
-    # --------------------------------------------------------
-
-    for indice_dia, dia in enumerate(
-        plan.get(
-            "days",
-            [],
+    story.append(
+        Paragraph(
+            f"<b>Tiendas seleccionadas:</b> "
+            f"{', '.join(tiendas)}",
+            normal
         )
-    ):
+    )
 
-        if indice_dia > 0:
-            story.append(
-                PageBreak()
-            )
+    story.append(Spacer(1, 8))
 
-        numero_dia = dia.get(
-            "day",
-            indice_dia + 1,
+    # ========================================================
+    # MENÚ
+    # ========================================================
+
+    story.append(
+        Paragraph(
+            "MENÚ",
+            subtitulo
         )
+    )
 
-        encabezado_dia = Table(
-            [
-                [
-                    Paragraph(
-                        f"DÍA {numero_dia}",
-                        day_style,
-                    )
-                ]
-            ],
-            colWidths=[540],
-        )
-
-        encabezado_dia.setStyle(
-            TableStyle(
-                [
-                    (
-                        "BACKGROUND",
-                        (0, 0),
-                        (-1, -1),
-                        colors.HexColor(
-                            "#065A82"
-                        ),
-                    ),
-                    (
-                        "TOPPADDING",
-                        (0, 0),
-                        (-1, -1),
-                        8,
-                    ),
-                    (
-                        "BOTTOMPADDING",
-                        (0, 0),
-                        (-1, -1),
-                        8,
-                    ),
-                ]
-            )
-        )
+    for dia in plan.get("dias", []):
 
         story.append(
-            encabezado_dia
+            Paragraph(
+                f"DÍA {dia.get('dia', '')}",
+                subtitulo
+            )
         )
 
-        comidas = dia.get(
-            "meals",
-            [],
-        )
-
-        for comida in comidas:
-
-            tipo = str(
-                comida.get(
-                    "tipo",
-                    "",
-                )
-            ).upper()
-
-            platillo = comida.get(
-                "platillo",
-                "Platillo",
-            )
+        for comida in dia.get("comidas", []):
 
             story.append(
                 Paragraph(
-                    tipo,
-                    meal_style,
+                    f"<b>{escapar_pdf(comida.get('tipo', ''))}: "
+                    f"{escapar_pdf(comida.get('nombre', ''))}</b>",
+                    normal
                 )
             )
 
-            story.append(
-                Paragraph(
-                    limpiar_texto_pdf(
-                        platillo
-                    ),
-                    dish_style,
-                )
+            categoria = comida.get(
+                "categoria_proteina",
+                ""
             )
 
-            story.append(
-                Paragraph(
-                    "<b>Ingredientes</b>",
-                    body_style,
-                )
-            )
-
-            ingredientes = comida.get(
-                "ingredientes",
-                [],
-            )
-
-            for ingrediente in ingredientes:
-
+            if categoria:
                 story.append(
                     Paragraph(
-                        "• "
-                        + limpiar_texto_pdf(
-                            ingrediente
-                        ),
-                        body_style,
+                        f"Proteína: {escapar_pdf(categoria)}",
+                        pequeno
                     )
                 )
 
             story.append(
-                Spacer(
-                    1,
-                    3,
+                Paragraph(
+                    "<b>Ingredientes por persona:</b>",
+                    pequeno
                 )
             )
+
+            ingredientes_texto = []
+
+            for ing in comida.get("ingredientes", []):
+
+                cantidad = numero_seguro(
+                    ing.get("cantidad_por_persona"),
+                    0
+                )
+
+                unidad = ing.get("unidad", "")
+
+                uso = ing.get("uso", "")
+
+                ingredientes_texto.append(
+                    f"• {escapar_pdf(uso)}: "
+                    f"{cantidad:g} {escapar_pdf(unidad)}"
+                )
+
+            for texto in ingredientes_texto:
+                story.append(
+                    Paragraph(
+                        texto,
+                        pequeno
+                    )
+                )
 
             story.append(
                 Paragraph(
-                    "<b>Preparación</b>",
-                    body_style,
+                    "<b>Preparación:</b>",
+                    pequeno
                 )
             )
 
-            pasos = comida.get(
-                "preparacion",
-                [],
-            )
-
-            for numero, paso in enumerate(
-                pasos,
-                start=1,
+            for i, paso in enumerate(
+                comida.get("preparacion", []),
+                1
             ):
-
                 story.append(
                     Paragraph(
-                        f"{numero}. "
-                        + limpiar_texto_pdf(
-                            paso
-                        ),
-                        body_style,
+                        f"{i}. {escapar_pdf(paso)}",
+                        pequeno
                     )
                 )
 
-    # --------------------------------------------------------
-    # LISTA DE COMPRAS
-    # --------------------------------------------------------
+            tiempo = comida.get(
+                "tiempo_minutos",
+                ""
+            )
 
-    story.append(
-        PageBreak()
-    )
+            if tiempo:
+                story.append(
+                    Paragraph(
+                        f"Tiempo aproximado: {tiempo} minutos",
+                        pequeno
+                    )
+                )
+
+            story.append(Spacer(1, 7))
+
+    story.append(PageBreak())
+
+    # ========================================================
+    # LISTA DE COMPRAS
+    # ========================================================
 
     story.append(
         Paragraph(
             "LISTA DE COMPRAS",
-            section_style,
+            subtitulo
         )
-    )
-
-    compras = plan.get(
-        "shopping_list",
-        [],
     )
 
     datos = [
         [
-            Paragraph(
-                "Tienda",
-                header_style,
-            ),
-            Paragraph(
-                "Producto",
-                header_style,
-            ),
-            Paragraph(
-                "Presentación",
-                header_style,
-            ),
-            Paragraph(
-                "Cantidad",
-                header_style,
-            ),
-            Paragraph(
-                "Precio",
-                header_style,
-            ),
-            Paragraph(
-                "Total",
-                header_style,
-            ),
+            "Producto",
+            "Presentación",
+            "Cantidad",
+            "Precio",
+            "Total",
+            "Tienda"
         ]
     ]
 
-    for item in compras:
+    for item in compra:
 
-        cantidad = (
-            f"{item['cantidad']:g} "
-            f"{item['unidad']}"
-        )
+        cantidad = item["cantidad_comprar"]
 
-        datos.append(
-            [
-                Paragraph(
-                    limpiar_texto_pdf(
-                        item["tienda"]
-                    ),
-                    table_style,
-                ),
-                Paragraph(
-                    limpiar_texto_pdf(
-                        item["producto"]
-                    ),
-                    table_style,
-                ),
-                Paragraph(
-                    limpiar_texto_pdf(
-                        item["descripcion"]
-                    ),
-                    table_style,
-                ),
-                Paragraph(
-                    limpiar_texto_pdf(
-                        cantidad
-                    ),
-                    table_style,
-                ),
-                Paragraph(
-                    f"${item['precio_unitario']:,.2f}",
-                    table_style,
-                ),
-                Paragraph(
-                    f"${item['total']:,.2f}",
-                    table_style,
-                ),
-            ]
-        )
+        datos.append([
+            Paragraph(
+                escapar_pdf(item["producto"]),
+                pequeno
+            ),
+            Paragraph(
+                f"{cantidad} × "
+                f"{escapar_pdf(str(item['contenido']))} "
+                f"{escapar_pdf(item['unidad_contenido'])}",
+                pequeno
+            ),
+            Paragraph(
+                f"{cantidad}",
+                pequeno
+            ),
+            Paragraph(
+                f"${item['precio_unitario']:,.2f}",
+                pequeno
+            ),
+            Paragraph(
+                f"${item['total']:,.2f}",
+                pequeno
+            ),
+            Paragraph(
+                escapar_pdf(item["tienda"]),
+                pequeno
+            )
+        ])
 
-    tabla = LongTable(
+    tabla = Table(
         datos,
-        colWidths=[
-            72,
-            120,
-            115,
-            65,
-            75,
-            75,
-        ],
         repeatRows=1,
+        colWidths=[
+            4.0 * cm,
+            3.2 * cm,
+            1.6 * cm,
+            2.0 * cm,
+            2.0 * cm,
+            3.0 * cm
+        ]
     )
 
     tabla.setStyle(
-        TableStyle(
-            [
-                (
-                    "BACKGROUND",
-                    (0, 0),
-                    (-1, 0),
-                    colors.HexColor(
-                        "#065A82"
-                    ),
-                ),
-                (
-                    "GRID",
-                    (0, 0),
-                    (-1, -1),
-                    0.4,
-                    colors.HexColor(
-                        "#CCCCCC"
-                    ),
-                ),
-                (
-                    "VALIGN",
-                    (0, 0),
-                    (-1, -1),
-                    "TOP",
-                ),
-                (
-                    "TOPPADDING",
-                    (0, 0),
-                    (-1, -1),
-                    4,
-                ),
-                (
-                    "BOTTOMPADDING",
-                    (0, 0),
-                    (-1, -1),
-                    4,
-                ),
-            ]
+        TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#222222")),
+            ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+            ("FONTSIZE", (0, 0), (-1, -1), 7),
+            ("GRID", (0, 0), (-1, -1), 0.4, colors.grey),
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ("LEFTPADDING", (0, 0), (-1, -1), 4),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+            ("TOPPADDING", (0, 0), (-1, -1), 4),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+        ])
+    )
+
+    story.append(tabla)
+
+    story.append(Spacer(1, 12))
+
+    story.append(
+        Paragraph(
+            f"<b>TOTAL ESTIMADO DE COMPRA: "
+            f"${total:,.2f}</b>",
+            subtitulo
         )
     )
 
-    story.append(
-        tabla
+    porcentaje = (
+        (total / presupuesto) * 100
+        if presupuesto > 0
+        else 0
     )
 
-    # --------------------------------------------------------
-    # RESUMEN
-    # --------------------------------------------------------
-
     story.append(
-        Spacer(
-            1,
-            18,
+        Paragraph(
+            f"Utilización del presupuesto: "
+            f"{porcentaje:.1f}%",
+            normal
         )
     )
 
     story.append(
         Paragraph(
-            "RESUMEN DEL PRESUPUESTO",
-            section_style,
-        )
-    )
-
-    total = evaluacion[
-        "total"
-    ]
-
-    diferencia = evaluacion[
-        "diferencia"
-    ]
-
-    if evaluacion[
-        "dentro_objetivo"
-    ]:
-
-        estado = (
-            "Dentro del presupuesto objetivo."
-        )
-
-    elif evaluacion[
-        "dentro_tolerancia"
-    ]:
-
-        estado = (
-            "Dentro de la tolerancia máxima de $100."
-        )
-
-    else:
-
-        estado = (
-            "Fuera del límite permitido."
-        )
-
-    resumen = [
-        [
-            Paragraph(
-                "<b>Presupuesto objetivo</b>",
-                table_style,
-            ),
-            Paragraph(
-                f"${presupuesto:,.2f}",
-                table_style,
-            ),
-        ],
-        [
-            Paragraph(
-                "<b>Total de compras</b>",
-                table_style,
-            ),
-            Paragraph(
-                f"${total:,.2f}",
-                table_style,
-            ),
-        ],
-        [
-            Paragraph(
-                "<b>Diferencia</b>",
-                table_style,
-            ),
-            Paragraph(
-                f"${diferencia:,.2f}",
-                table_style,
-            ),
-        ],
-        [
-            Paragraph(
-                "<b>Límite máximo</b>",
-                table_style,
-            ),
-            Paragraph(
-                f"${evaluacion['limite']:,.2f}",
-                table_style,
-            ),
-        ],
-        [
-            Paragraph(
-                "<b>Estado</b>",
-                table_style,
-            ),
-            Paragraph(
-                limpiar_texto_pdf(
-                    estado
-                ),
-                table_style,
-            ),
-        ],
-    ]
-
-    tabla_resumen = Table(
-        resumen,
-        colWidths=[
-            220,
-            320,
-        ],
-    )
-
-    tabla_resumen.setStyle(
-        TableStyle(
-            [
-                (
-                    "GRID",
-                    (0, 0),
-                    (-1, -1),
-                    0.4,
-                    colors.HexColor(
-                        "#CCCCCC"
-                    ),
-                ),
-                (
-                    "BACKGROUND",
-                    (0, 0),
-                    (0, -1),
-                    colors.HexColor(
-                        "#F0F4F8"
-                    ),
-                ),
-                (
-                    "VALIGN",
-                    (0, 0),
-                    (-1, -1),
-                    "TOP",
-                ),
-                (
-                    "TOPPADDING",
-                    (0, 0),
-                    (-1, -1),
-                    6,
-                ),
-                (
-                    "BOTTOMPADDING",
-                    (0, 0),
-                    (-1, -1),
-                    6,
-                ),
-            ]
+            f"Límite máximo permitido: "
+            f"${presupuesto + TOLERANCIA_PRESUPUESTO:,.2f}",
+            normal
         )
     )
 
     story.append(
-        tabla_resumen
-    )
-
-    # --------------------------------------------------------
-    # APROVECHAMIENTO
-    # --------------------------------------------------------
-
-    story.append(
-        Spacer(
-            1,
-            14,
-        )
+        Spacer(1, 8)
     )
 
     story.append(
         Paragraph(
-            "APROVECHAMIENTO",
-            section_style,
+            "Las cantidades de compra se calcularon "
+            "automáticamente a partir de las porciones "
+            "por persona y las presentaciones disponibles.",
+            pequeno
         )
     )
 
-    aprovechamiento = plan.get(
-        "aprovechamiento",
-        "",
-    )
+    doc.build(story)
 
-    story.append(
-        Paragraph(
-            limpiar_texto_pdf(
-                aprovechamiento
-            ),
-            body_style,
-        )
-    )
+    buffer.seek(0)
 
-    # --------------------------------------------------------
-    # NOTA
-    # --------------------------------------------------------
-
-    story.append(
-        Spacer(
-            1,
-            12,
-        )
-    )
-
-    story.append(
-        HRFlowable(
-            width="100%",
-            thickness=0.5,
-            color=colors.HexColor(
-                "#CCCCCC"
-            ),
-        )
-    )
-
-    story.append(
-        Spacer(
-            1,
-            6,
-        )
-    )
-
-    story.append(
-        Paragraph(
-            (
-                "Los precios utilizados corresponden a "
-                "precios consultados en catálogos públicos "
-                "o a precios de respaldo previamente "
-                "verificados. Los precios pueden cambiar "
-                "por promociones, existencias, zona y "
-                "fecha de compra."
-            ),
-            small_style,
-        )
-    )
-
-    # --------------------------------------------------------
-    # PIE
-    # --------------------------------------------------------
-
-    def pie_pagina(
-        canvas,
-        doc,
-    ):
-
-        canvas.saveState()
-
-        canvas.setFont(
-            "Helvetica",
-            7,
-        )
-
-        canvas.setFillColor(
-            colors.HexColor(
-                "#777777"
-            )
-        )
-
-        canvas.drawCentredString(
-            letter[0] / 2,
-            20,
-            (
-                f"KashCook AI | "
-                f"Página {doc.page}"
-            ),
-        )
-
-        canvas.restoreState()
-
-    doc.build(
-        story,
-        onFirstPage=pie_pagina,
-        onLaterPages=pie_pagina,
-    )
-
-    return pdf_buffer.getvalue()
+    return buffer.getvalue()
 
 
 # ============================================================
@@ -2202,926 +2019,550 @@ def generar_pdf(
 
 def mostrar_plan(
     plan,
-    evaluacion,
+    compra,
+    total,
+    presupuesto,
+    personas
 ):
 
     st.success(
-        "🎉 Plan generado correctamente."
+        f"Plan generado para {personas} persona(s). "
+        f"Compra estimada: ${total:,.2f}"
     )
 
-    st.markdown("---")
+    porcentaje = (
+        total / presupuesto * 100
+        if presupuesto > 0
+        else 0
+    )
 
-    # --------------------------------------------------------
-    # RESUMEN SUPERIOR
-    # --------------------------------------------------------
+    col1, col2, col3 = st.columns(3)
 
-    total = evaluacion[
-        "total"
-    ]
-
-    diferencia = evaluacion[
-        "diferencia"
-    ]
-
-    limite = evaluacion[
-        "limite"
-    ]
-
-    c1, c2, c3, c4 = st.columns(4)
-
-    with c1:
+    with col1:
         st.metric(
             "Presupuesto",
-            f"${evaluacion['presupuesto']:,.2f}",
+            f"${presupuesto:,.2f}"
         )
 
-    with c2:
+    with col2:
         st.metric(
-            "Compra",
-            f"${total:,.2f}",
+            "Compra estimada",
+            f"${total:,.2f}"
         )
 
-    with c3:
+    with col3:
         st.metric(
-            "Diferencia",
-            f"${diferencia:,.2f}",
+            "Utilización",
+            f"{porcentaje:.1f}%"
         )
 
-    with c4:
-        st.metric(
-            "Límite máximo",
-            f"${limite:,.2f}",
+    st.divider()
+
+    # ========================================================
+    # MENÚ
+    # ========================================================
+
+    st.header("🍽️ Menú")
+
+    for dia in plan.get("dias", []):
+
+        st.subheader(
+            f"Día {dia.get('dia', '')}"
         )
 
-    if evaluacion[
-        "dentro_objetivo"
-    ]:
+        for comida in dia.get("comidas", []):
 
-        st.success(
-            "✅ El plan quedó dentro del presupuesto."
-        )
-
-    elif evaluacion[
-        "dentro_tolerancia"
-    ]:
-
-        st.warning(
-            "⚠️ El plan utiliza parte de la "
-            "tolerancia de $100 permitida."
-        )
-
-    else:
-
-        st.error(
-            "❌ El plan supera la tolerancia permitida."
-        )
-
-    # --------------------------------------------------------
-    # DÍAS
-    # --------------------------------------------------------
-
-    for dia in plan.get(
-        "days",
-        [],
-    ):
-
-        numero = dia.get(
-            "day",
-            "",
-        )
-
-        st.markdown(
-            f"## 📅 Día {numero}"
-        )
-
-        for comida in dia.get(
-            "meals",
-            [],
-        ):
-
-            tipo = comida.get(
-                "tipo",
-                "",
-            )
-
-            platillo = comida.get(
-                "platillo",
-                "",
-            )
-
-            with st.container(
-                border=True
+            with st.expander(
+                f"{comida.get('tipo', '')} — "
+                f"{comida.get('nombre', '')}",
+                expanded=False
             ):
 
-                st.markdown(
-                    f"### {tipo}: {platillo}"
+                categoria = comida.get(
+                    "categoria_proteina",
+                    ""
                 )
 
+                if categoria:
+                    st.caption(
+                        f"Proteína: {categoria}"
+                    )
+
                 st.markdown(
-                    "**Ingredientes**"
+                    "**Ingredientes por persona:**"
                 )
 
-                for ingrediente in comida.get(
+                for ing in comida.get(
                     "ingredientes",
-                    [],
+                    []
                 ):
 
-                    st.markdown(
-                        f"- {ingrediente}"
+                    st.write(
+                        f"- {ing.get('uso', 'Ingrediente')}: "
+                        f"{ing.get('cantidad_por_persona')} "
+                        f"{ing.get('unidad', '')}"
                     )
 
                 st.markdown(
-                    "**Preparación**"
+                    "**Preparación:**"
                 )
 
-                for numero_paso, paso in enumerate(
-                    comida.get(
-                        "preparacion",
-                        [],
-                    ),
-                    start=1,
+                for i, paso in enumerate(
+                    comida.get("preparacion", []),
+                    1
                 ):
-
-                    st.markdown(
-                        f"{numero_paso}. {paso}"
+                    st.write(
+                        f"{i}. {paso}"
                     )
 
-    # --------------------------------------------------------
+                if comida.get("tiempo_minutos"):
+                    st.caption(
+                        f"⏱️ {comida.get('tiempo_minutos')} minutos"
+                    )
+
+    st.divider()
+
+    # ========================================================
     # COMPRAS
-    # --------------------------------------------------------
+    # ========================================================
 
-    st.markdown("---")
+    st.header("🛒 Lista de compras")
 
-    st.markdown(
-        "## 🛒 Lista de compras"
+    filas = []
+
+    for item in compra:
+
+        filas.append({
+            "Producto": item["producto"],
+            "Presentación": (
+                f"{item['contenido']} "
+                f"{item['unidad_contenido']}"
+            ),
+            "Cantidad": item["cantidad_comprar"],
+            "Precio unitario": (
+                f"${item['precio_unitario']:,.2f}"
+            ),
+            "Total": (
+                f"${item['total']:,.2f}"
+            ),
+            "Tienda": item["tienda"]
+        })
+
+    st.dataframe(
+        filas,
+        use_container_width=True,
+        hide_index=True
     )
 
-    compras = plan.get(
-        "shopping_list",
-        [],
+
+# ============================================================
+# INTERFAZ
+# ============================================================
+
+st.title("🍳 KashCook AI")
+
+st.write(
+    "Planea tus comidas, calcula las cantidades reales "
+    "y genera tu lista de compras."
+)
+
+st.divider()
+
+cliente = obtener_cliente_groq()
+
+if cliente is None:
+
+    st.warning(
+        "Ingresa tu GROQ API Key o configúrala en "
+        "Streamlit Secrets como GROQ_API_KEY."
     )
 
-    if compras:
+    st.stop()
 
-        filas = []
 
-        for item in compras:
+# ============================================================
+# FORMULARIO
+# ============================================================
 
-            filas.append(
-                {
-                    "Tienda": item[
-                        "tienda"
-                    ],
-                    "Producto": item[
-                        "producto"
-                    ],
-                    "Presentación": item[
-                        "descripcion"
-                    ],
-                    "Cantidad": (
-                        f"{item['cantidad']:g} "
-                        f"{item['unidad']}"
-                    ),
-                    "Precio": (
-                        f"${item['precio_unitario']:,.2f}"
-                    ),
-                    "Total": (
-                        f"${item['total']:,.2f}"
-                    ),
-                }
-            )
+col1, col2 = st.columns(2)
 
-        st.dataframe(
-            filas,
-            use_container_width=True,
-            hide_index=True,
-        )
+with col1:
 
-    # --------------------------------------------------------
-    # APROVECHAMIENTO
-    # --------------------------------------------------------
+    st.subheader("🛒 Tiendas")
 
-    st.markdown(
-        "## ♻️ Aprovechamiento"
+    tiendas_seleccionadas = []
+
+    for tienda in TIENDAS_DISPONIBLES:
+
+        if st.checkbox(
+            tienda,
+            value=(tienda == "Alsuper"),
+            key=f"tienda_{tienda}"
+        ):
+            tiendas_seleccionadas.append(tienda)
+
+    dias = st.number_input(
+        "📅 Días",
+        min_value=1,
+        max_value=7,
+        value=3,
+        step=1
     )
 
-    st.write(
-        plan.get(
-            "aprovechamiento",
-            "",
+    personas = st.number_input(
+        "👨‍👩‍👧‍👦 Personas",
+        min_value=1,
+        max_value=10,
+        value=4,
+        step=1
+    )
+
+    presupuesto = st.number_input(
+        "💰 Presupuesto total",
+        min_value=200.0,
+        max_value=10000.0,
+        value=1500.0,
+        step=50.0
+    )
+
+
+with col2:
+
+    st.subheader("🍽️ Preferencias")
+
+    estilos = st.multiselect(
+        "Estilos de cocina",
+        [
+            "Mexicana",
+            "Casera",
+            "Saludable",
+            "Económica",
+            "Italiana",
+            "Mediterránea",
+            "Alta en proteína",
+            "Rápida"
+        ],
+        default=["Mexicana", "Casera"]
+    )
+
+    comidas = st.multiselect(
+        "Comidas a planear",
+        [
+            "Desayuno",
+            "Comida",
+            "Cena"
+        ],
+        default=[
+            "Desayuno",
+            "Comida",
+            "Cena"
+        ]
+    )
+
+    electrodomesticos = st.multiselect(
+        "Electrodomésticos disponibles",
+        [
+            "Estufa",
+            "Horno",
+            "Microondas",
+            "Freidora de aire",
+            "Licuadora",
+            "Olla de presión",
+            "Parrilla eléctrica"
+        ],
+        default=[
+            "Estufa",
+            "Licuadora"
+        ]
+    )
+
+    restricciones = st.text_area(
+        "🚫 Alergias / restricciones",
+        placeholder=(
+            "Ejemplo: sin cerdo, sin lactosa, "
+            "alergia a cacahuate..."
         )
     )
 
 
 # ============================================================
-# GENERACIÓN
+# VALIDACIONES
+# ============================================================
+
+if not tiendas_seleccionadas:
+
+    st.error(
+        "Selecciona al menos una tienda."
+    )
+
+    st.stop()
+
+if not comidas:
+
+    st.error(
+        "Selecciona al menos una comida."
+    )
+
+    st.stop()
+
+
+catalogo = crear_catalogo_tienda(
+    tiendas_seleccionadas
+)
+
+if not catalogo:
+
+    st.error(
+        "No hay productos disponibles para "
+        "las tiendas seleccionadas."
+    )
+
+    st.stop()
+
+
+# ============================================================
+# GENERAR
 # ============================================================
 
 if st.button(
-    "🚀 Generar Plan Inteligente",
-    use_container_width=True,
+    "🚀 Generar plan",
+    type="primary",
+    use_container_width=True
 ):
 
-    # --------------------------------------------------------
-    # VALIDACIONES
-    # --------------------------------------------------------
-
-    if not tiempos:
-
-        st.warning(
-            "Selecciona al menos un tiempo de comida."
-        )
-
-        st.stop()
-
-    if not tiendas_seleccionadas:
-
-        st.warning(
-            "Selecciona al menos un supermercado."
-        )
-
-        st.stop()
-
-    if not estilos_seleccionados:
-
-        st.warning(
-            "Selecciona al menos un estilo culinario."
-        )
-
-        st.stop()
-
-    if client is None:
-
-        st.error(
-            "❌ Ingresa una Groq API Key válida."
-        )
-
-        st.stop()
-
-    # --------------------------------------------------------
-    # LÍMITE
-    # --------------------------------------------------------
-
-    limite_presupuesto = (
-        float(presupuesto)
-        + TOLERANCIA_PRESUPUESTO
-    )
-
-    # --------------------------------------------------------
-    # CATÁLOGO
-    # --------------------------------------------------------
-
     with st.spinner(
-        "🛒 Consultando productos y precios..."
-    ):
-
-        catalogo = crear_catalogo_seleccionado(
-            tiendas_seleccionadas
-        )
-
-    if not catalogo:
-
-        st.error(
-            "❌ No fue posible obtener productos "
-            "de las tiendas seleccionadas."
-        )
-
-        st.stop()
-
-    # --------------------------------------------------------
-    # ASIGNAR ID
-    # --------------------------------------------------------
-
-    for indice, producto in enumerate(
-        catalogo,
-        start=1,
-    ):
-
-        producto["id"] = indice
-
-    # --------------------------------------------------------
-    # CATALOGO PARA GROQ
-    # --------------------------------------------------------
-
-    catalogo_texto = "\n".join(
-        [
-            (
-                f"ID={p['id']} | "
-                f"Tienda={p['tienda']} | "
-                f"Categoría={p['categoria']} | "
-                f"Producto={p['nombre']} | "
-                f"Presentación={p['descripcion']} | "
-                f"Precio=${p['precio']:.2f} | "
-                f"Fuente={p['fuente_precio']}"
-            )
-            for p in catalogo
-        ]
-    )
-
-    # --------------------------------------------------------
-    # PROTEÍNAS
-    # --------------------------------------------------------
-
-    categorias_proteina = [
-        p
-        for p in catalogo
-        if p["categoria"]
-        in [
-            "Pollo",
-            "Res",
-            "Puerco",
-            "Pescado",
-            "Atún",
-            "Huevo",
-        ]
-    ]
-
-    proteinas_texto = "\n".join(
-        [
-            (
-                f"ID={p['id']} | "
-                f"{p['categoria']} | "
-                f"{p['nombre']} | "
-                f"{p['descripcion']} | "
-                f"${p['precio']:.2f}"
-            )
-            for p in categorias_proteina
-        ]
-    )
-
-    # --------------------------------------------------------
-    # PROMPT
-    # --------------------------------------------------------
-
-    prompt_text = f"""
-Eres KashCook AI, un chef profesional y planificador
-de alimentación familiar.
-
-Tu trabajo es crear un menú REALISTA, completo y
-económicamente controlado.
-
-========================================================
-DATOS DEL USUARIO
-========================================================
-
-Personas: {personas}
-
-Días: {dias}
-
-Presupuesto objetivo:
-${presupuesto:.2f} MXN
-
-Tolerancia máxima:
-${TOLERANCIA_PRESUPUESTO:.2f}
-
-Límite absoluto:
-${limite_presupuesto:.2f}
-
-Tiempos:
-{', '.join(tiempos)}
-
-Estilos:
-{', '.join(estilos_seleccionados)}
-
-Utensilios:
-{', '.join(utensilios)}
-
-Restricciones:
-{restringidos if restringidos else 'Ninguna'}
-
-TIENDAS SELECCIONADAS POR EL USUARIO:
-{', '.join(tiendas_seleccionadas)}
-
-========================================================
-REGLA FUNDAMENTAL DE TIENDAS
-========================================================
-
-El usuario eligió las tiendas.
-
-NO compares precios entre tiendas.
-
-NO decidas qué tienda es más barata.
-
-NO cambies de tienda buscando el menor precio.
-
-Puedes utilizar productos únicamente de las tiendas
-seleccionadas.
-
-Si hay varias tiendas seleccionadas, puedes utilizar
-productos de cualquiera de ellas.
-
-========================================================
-CATÁLOGO REAL
-========================================================
-
-Los siguientes productos son los únicos productos
-que puedes utilizar para generar la lista de compras.
-
-NO inventes productos.
-
-NO inventes precios.
-
-NO inventes marcas.
-
-NO inventes presentaciones.
-
-CATÁLOGO:
-
-{catalogo_texto}
-
-========================================================
-PROTEÍNAS DISPONIBLES
-========================================================
-
-{proteinas_texto}
-
-========================================================
-REGLAS DEL MENÚ
-========================================================
-
-Genera exactamente {dias} días.
-
-Cada día debe contener exactamente estos tiempos:
-
-{', '.join(tiempos)}
-
-NO utilices "Almuerzo".
-
-Varía las proteínas.
-
-NO hagas pollo todos los días.
-
-Utiliza, cuando el presupuesto lo permita:
-
-- pollo
-- res
-- puerco
-- pescado
-- atún
-- huevo
-
-Intenta utilizar al menos 4 fuentes diferentes
-de proteína durante todo el plan cuando haya
-suficientes productos disponibles.
-
-No repitas exactamente el mismo platillo.
-
-Reutiliza ingredientes inteligentemente para reducir
-desperdicio.
-
-Respeta estrictamente las restricciones y alergias.
-
-Utiliza únicamente los utensilios disponibles.
-
-========================================================
-PRESUPUESTO
-========================================================
-
-Presupuesto objetivo:
-${presupuesto:.2f}
-
-Límite absoluto:
-${limite_presupuesto:.2f}
-
-PRIORIDAD:
-
-1. Intenta quedar por debajo o igual al presupuesto
-   objetivo.
-
-2. Si es imposible, puedes superar el presupuesto.
-
-3. JAMÁS superes el límite de:
-   ${limite_presupuesto:.2f}
-
-La tolerancia de $100 NO significa que debas gastar
-los $100 adicionales.
-
-Úsala solamente cuando sea necesario.
-
-========================================================
-RECETAS
-========================================================
-
-Las recetas deben ser COMPLETAS.
-
-Cada comida debe contener:
-
-Ingredientes:
-- cantidades
-- ingredientes
-
-Preparación:
-- pasos numerados
-- orden lógico
-- tiempos aproximados cuando sean útiles
-- cocción adecuada
-
-NO resumas.
-
-NO omitas pasos.
-
-NO uses frases vacías como:
-"cocina hasta que esté listo".
-
-========================================================
-LISTA DE COMPRAS
-========================================================
-
-La lista debe contener solamente los productos
-realmente necesarios.
-
-MUY IMPORTANTE:
-
-Cada producto debe utilizar el ID exacto del catálogo.
-
-No inventes IDs.
-
-No utilices productos fuera del catálogo.
-
-Para cada producto indica:
-
-producto_id
-cantidad
-unidad
-
-Ejemplo:
-
-{{
-  "producto_id": 17,
-  "cantidad": 2,
-  "unidad": "latas"
-}}
-
-La cantidad representa cuántas unidades de esa
-presentación se deben comprar.
-
-========================================================
-APROVECHAMIENTO
-========================================================
-
-Explica cómo aprovechar ingredientes sobrantes.
-
-========================================================
-FORMATO JSON OBLIGATORIO
-========================================================
-
-RESPONDE ÚNICAMENTE JSON.
-
-NO Markdown.
-
-NO explicaciones antes del JSON.
-
-NO explicaciones después del JSON.
-
-La estructura EXACTA debe ser:
-
-{{
-  "days": [
-    {{
-      "day": 1,
-      "meals": [
-        {{
-          "tipo": "DESAYUNO",
-          "platillo": "Nombre",
-          "ingredientes": [
-            "2 huevos",
-            "1 tomate"
-          ],
-          "preparacion": [
-            "Paso 1",
-            "Paso 2",
-            "Paso 3"
-          ]
-        }}
-      ]
-    }}
-  ],
-  "shopping_list": [
-    {{
-      "producto_id": 1,
-      "cantidad": 1,
-      "unidad": "kg"
-    }}
-  ],
-  "aprovechamiento": "Explicación..."
-}}
-
-========================================================
-REGLA CRÍTICA
-========================================================
-
-No inventes precios.
-
-No inventes productos.
-
-No inventes IDs.
-
-No superes ${limite_presupuesto:.2f}.
-
-Primero intenta quedar en ${presupuesto:.2f} o menos.
-
-Las recetas deben estar completas.
-"""
-
-    # --------------------------------------------------------
-    # LLAMAR GROQ
-    # --------------------------------------------------------
-
-    with st.spinner(
-        "🤖 KashCook está diseñando tu plan..."
+        "Diseñando el menú y calculando cantidades reales..."
     ):
 
         try:
 
-            completion = client.chat.completions.create(
-                model="openai/gpt-oss-120b",
-                messages=[
-                    {
-                        "role": "system",
-                        "content": (
-                            "Responde únicamente JSON válido."
-                        ),
-                    },
-                    {
-                        "role": "user",
-                        "content": prompt_text,
-                    },
-                ],
-                temperature=0.15,
-                max_tokens=14000,
+            prompt = construir_prompt(
+                personas=personas,
+                dias=dias,
+                presupuesto=presupuesto,
+                estilos=estilos,
+                comidas=comidas,
+                restricciones=restricciones,
+                electrodomesticos=electrodomesticos,
+                catalogo=catalogo
             )
 
-            respuesta = (
-                completion
-                .choices[0]
-                .message
-                .content
+            respuesta = llamar_groq(
+                cliente,
+                prompt,
+                temperatura=0.45
             )
 
-        except Exception as e:
+            plan = extraer_json(respuesta)
 
-            st.error(
-                f"Error al consultar Groq: {e}"
+            compra, total = calcular_compra(
+                plan,
+                catalogo,
+                personas
             )
 
-            st.stop()
+            # =================================================
+            # AJUSTE 1:
+            # PRESUPUESTO DEMASIADO BAJO
+            # =================================================
 
-    # --------------------------------------------------------
-    # PARSEAR
-    # --------------------------------------------------------
+            if (
+                total < presupuesto * MIN_UTILIZACION_PRESUPUESTO
+                and presupuesto >= 500
+            ):
 
-    plan = extraer_json(
-        respuesta
-    )
+                st.info(
+                    "El primer cálculo dejó demasiado "
+                    "presupuesto disponible. Ajustando "
+                    "el plan para aprovecharlo mejor..."
+                )
 
-    if plan is None:
+                prompt_ajuste = construir_prompt_ajuste(
+                    plan=plan,
+                    compra=compra,
+                    total=total,
+                    personas=personas,
+                    dias=dias,
+                    presupuesto=presupuesto,
+                    catalogo=catalogo,
+                    motivo="BAJO"
+                )
 
-        st.error(
-            "❌ KashCook recibió una respuesta que "
-            "no pudo convertir a JSON."
-        )
+                respuesta_ajuste = llamar_groq(
+                    cliente,
+                    prompt_ajuste,
+                    temperatura=0.35
+                )
 
-        st.code(
-            respuesta,
-            language="text",
-        )
+                plan_ajustado = extraer_json(
+                    respuesta_ajuste
+                )
 
-        st.stop()
-
-    # --------------------------------------------------------
-    # NORMALIZAR
-    # --------------------------------------------------------
-
-    plan = normalizar_plan(
-        plan,
-        catalogo,
-        dias,
-        tiempos,
-    )
-
-    if plan is None:
-
-        st.error(
-            "❌ El plan generado no tiene la "
-            "estructura esperada."
-        )
-
-        st.stop()
-
-    # --------------------------------------------------------
-    # VALIDAR DÍAS
-    # --------------------------------------------------------
-
-    if len(
-        plan.get(
-            "days",
-            [],
-        )
-    ) < dias:
-
-        st.error(
-            "❌ KashCook no generó todos los días "
-            "solicitados."
-        )
-
-        st.stop()
-
-    # --------------------------------------------------------
-    # PRESUPUESTO
-    # --------------------------------------------------------
-
-    evaluacion = evaluar_presupuesto(
-        plan.get(
-            "shopping_list",
-            [],
-        ),
-        presupuesto,
-    )
-
-    # --------------------------------------------------------
-    # SI SUPERA $100
-    # --------------------------------------------------------
-
-    if not evaluacion[
-        "dentro_tolerancia"
-    ]:
-
-        st.warning(
-            "⚠️ El primer plan supera la tolerancia "
-            "de $100. KashCook intentará reajustarlo."
-        )
-
-        prompt_ajuste = f"""
-Revisa el siguiente plan de alimentación.
-
-Presupuesto objetivo:
-${presupuesto:.2f}
-
-Límite absoluto:
-${limite_presupuesto:.2f}
-
-El plan actual supera el límite.
-
-Debes reducir el costo sin eliminar comidas
-ni días.
-
-Prioriza:
-
-1. reducir cantidades excesivas;
-2. utilizar productos del mismo catálogo;
-3. mantener variedad de proteínas;
-4. reutilizar ingredientes;
-5. conservar recetas realistas.
-
-NO cambies de tienda.
-
-NO inventes productos.
-
-NO inventes precios.
-
-UTILIZA ÚNICAMENTE LOS IDs DEL CATÁLOGO.
-
-Debes devolver ÚNICAMENTE JSON válido con esta estructura:
-
-{{
-  "days": [...],
-  "shopping_list": [
-    {{
-      "producto_id": 1,
-      "cantidad": 1,
-      "unidad": "kg"
-    }}
-  ],
-  "aprovechamiento": "..."
-}}
-
-PLAN ACTUAL:
-
-{json.dumps(plan, ensure_ascii=False)}
-
-CATÁLOGO:
-
-{catalogo_texto}
-"""
-
-        try:
-
-            ajuste = client.chat.completions.create(
-                model="openai/gpt-oss-120b",
-                messages=[
-                    {
-                        "role": "system",
-                        "content": (
-                            "Responde únicamente JSON válido."
-                        ),
-                    },
-                    {
-                        "role": "user",
-                        "content": prompt_ajuste,
-                    },
-                ],
-                temperature=0.10,
-                max_tokens=14000,
-            )
-
-            respuesta_ajuste = (
-                ajuste
-                .choices[0]
-                .message
-                .content
-            )
-
-            plan_ajustado = extraer_json(
-                respuesta_ajuste
-            )
-
-            if plan_ajustado:
-
-                plan_ajustado = normalizar_plan(
+                compra_ajustada, total_ajustado = calcular_compra(
                     plan_ajustado,
                     catalogo,
-                    dias,
-                    tiempos,
+                    personas
                 )
 
-                nueva_evaluacion = evaluar_presupuesto(
-                    plan_ajustado.get(
-                        "shopping_list",
-                        [],
-                    ),
-                    presupuesto,
-                )
-
-                if nueva_evaluacion[
-                    "dentro_tolerancia"
-                ]:
+                # Solo aceptamos el ajuste si realmente
+                # mejoró la utilización sin exceder el límite.
+                if (
+                    total_ajustado > total
+                    and
+                    total_ajustado <= (
+                        presupuesto +
+                        TOLERANCIA_PRESUPUESTO
+                    )
+                ):
 
                     plan = plan_ajustado
-                    evaluacion = nueva_evaluacion
+                    compra = compra_ajustada
+                    total = total_ajustado
 
-        except Exception:
-            pass
+            # =================================================
+            # AJUSTE 2:
+            # PRESUPUESTO EXCEDIDO
+            # =================================================
 
-    # --------------------------------------------------------
-    # VALIDACIÓN FINAL
-    # --------------------------------------------------------
+            if total > (
+                presupuesto +
+                TOLERANCIA_PRESUPUESTO
+            ):
 
-    if not evaluacion[
-        "dentro_tolerancia"
-    ]:
+                st.warning(
+                    "El primer menú excedió el límite. "
+                    "KashCook está ajustándolo..."
+                )
 
-        st.error(
-            "❌ No fue posible generar un plan dentro "
-            "del presupuesto + $100 de tolerancia."
-        )
+                prompt_ajuste = construir_prompt_ajuste(
+                    plan=plan,
+                    compra=compra,
+                    total=total,
+                    personas=personas,
+                    dias=dias,
+                    presupuesto=presupuesto,
+                    catalogo=catalogo,
+                    motivo="ALTO"
+                )
 
-        st.info(
-            "Prueba aumentando el presupuesto, "
-            "reduciendo personas o disminuyendo días."
-        )
+                respuesta_ajuste = llamar_groq(
+                    cliente,
+                    prompt_ajuste,
+                    temperatura=0.25
+                )
 
-        st.stop()
+                plan_ajustado = extraer_json(
+                    respuesta_ajuste
+                )
 
-    # --------------------------------------------------------
-    # MOSTRAR
-    # --------------------------------------------------------
+                compra_ajustada, total_ajustado = calcular_compra(
+                    plan_ajustado,
+                    catalogo,
+                    personas
+                )
 
-    mostrar_plan(
-        plan,
-        evaluacion,
-    )
+                if total_ajustado <= (
+                    presupuesto +
+                    TOLERANCIA_PRESUPUESTO
+                ):
 
-    # --------------------------------------------------------
-    # PDF
-    # --------------------------------------------------------
+                    plan = plan_ajustado
+                    compra = compra_ajustada
+                    total = total_ajustado
 
-    with st.spinner(
-        "📄 Preparando PDF completo..."
-    ):
+            # =================================================
+            # VALIDACIÓN FINAL ABSOLUTA
+            # =================================================
 
-        try:
+            if total > (
+                presupuesto +
+                TOLERANCIA_PRESUPUESTO
+            ):
 
-            pdf_bytes = generar_pdf(
-                plan,
-                dias,
-                personas,
-                presupuesto,
-                tiendas_seleccionadas,
-                evaluacion,
+                st.error(
+                    "No fue posible generar un plan válido "
+                    "dentro del presupuesto permitido."
+                )
+
+                st.stop()
+
+            # =================================================
+            # VALIDACIÓN DE COMIDAS
+            # =================================================
+
+            comidas_generadas = contar_comidas(
+                plan
             )
 
-            st.download_button(
-                label=(
-                    "📄 Descargar Plan KashCook en PDF"
-                ),
-                data=pdf_bytes,
-                file_name="KashCook_Plan.pdf",
-                mime="application/pdf",
-                use_container_width=True,
+            comidas_esperadas = (
+                dias *
+                len(comidas)
+            )
+
+            if comidas_generadas < comidas_esperadas:
+
+                st.warning(
+                    f"El modelo generó {comidas_generadas} "
+                    f"comidas de {comidas_esperadas} esperadas."
+                )
+
+            # =================================================
+            # GUARDAR EN SESSION
+            # =================================================
+
+            st.session_state["plan"] = plan
+            st.session_state["compra"] = compra
+            st.session_state["total"] = total
+            st.session_state["presupuesto"] = presupuesto
+            st.session_state["personas"] = personas
+            st.session_state["dias"] = dias
+            st.session_state["tiendas"] = tiendas_seleccionadas
+
+            st.success(
+                "Plan generado correctamente."
             )
 
         except Exception as e:
 
             st.error(
-                f"Error al generar PDF: {e}"
+                f"Ocurrió un error al generar el plan: {e}"
             )
+
+
+# ============================================================
+# MOSTRAR RESULTADO
+# ============================================================
+
+if "plan" in st.session_state:
+
+    mostrar_plan(
+        plan=st.session_state["plan"],
+        compra=st.session_state["compra"],
+        total=st.session_state["total"],
+        presupuesto=st.session_state["presupuesto"],
+        personas=st.session_state["personas"]
+    )
+
+    st.divider()
+
+    # ========================================================
+    # PDF
+    # ========================================================
+
+    pdf_bytes = generar_pdf(
+        plan=st.session_state["plan"],
+        compra=st.session_state["compra"],
+        total=st.session_state["total"],
+        presupuesto=st.session_state["presupuesto"],
+        personas=st.session_state["personas"],
+        dias=st.session_state["dias"],
+        tiendas=st.session_state["tiendas"]
+    )
+
+    st.download_button(
+        "📄 Descargar plan completo en PDF",
+        data=pdf_bytes,
+        file_name="KashCook_AI_plan.pdf",
+        mime="application/pdf",
+        use_container_width=True
+    )
