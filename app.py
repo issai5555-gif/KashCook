@@ -1074,44 +1074,29 @@ def llamar_groq(cliente, prompt, temperatura=0.4):
 
     respuesta = cliente.chat.completions.create(
         model="openai/gpt-oss-120b",
-
         messages=[
             {
                 "role": "system",
-                "content": """
-Eres KashCook AI.
-
-Eres experto en planificación de comidas familiares,
-recetas, cantidades, compras y presupuestos.
-
-Debes seguir estrictamente las instrucciones del usuario.
-
-Cuando se solicite un plan debes devolver exclusivamente
-JSON válido, sin Markdown, sin comentarios y sin texto
-antes o después del JSON.
-""",
+                "content": (
+                    "Eres KashCook AI. Diseñas menús familiares, "
+                    "recetas, cantidades y compras. Responde solo "
+                    "JSON válido cuando se solicite un plan."
+                ),
             },
             {
                 "role": "user",
                 "content": prompt,
             },
         ],
-
         temperature=temperatura,
-
-        max_tokens=24000,
-
-        response_format={
-            "type": "json_object"
-        },
+        max_tokens=8000,
+        response_format={"type": "json_object"},
     )
 
     contenido = respuesta.choices[0].message.content
 
     if not contenido:
-        raise ValueError(
-            "Groq no devolvió contenido."
-        )
+        raise ValueError("Groq no devolvió contenido.")
 
     return contenido
 
@@ -1464,88 +1449,65 @@ def validar_plan(plan):
     return dias_validos > 0
 
 
-# ============================================================
-# VALIDACIÓN COMPLETA DEL PLAN
-# ============================================================
-
 def normalizar_texto(valor):
-    """Normaliza texto para comparar nombres de comidas sin importar mayúsculas/acentos."""
     texto = str(valor or "").strip().lower()
-    reemplazos = {
-        "á": "a",
-        "é": "e",
-        "í": "i",
-        "ó": "o",
-        "ú": "u",
-        "ü": "u",
-    }
-    for origen, destino in reemplazos.items():
-        texto = texto.replace(origen, destino)
+    for a, b in {"á":"a","é":"e","í":"i","ó":"o","ú":"u","ü":"u"}.items():
+        texto = texto.replace(a, b)
     return texto
 
 
-def validar_plan_completo(plan, dias_solicitados, comidas_solicitadas):
-    """Comprueba que el plan tenga exactamente los días y comidas solicitados."""
+def validar_plan_completo(plan, dias_solicitados, comidas_solicitadas, catalogo):
     if not validar_plan(plan):
-        return False
+        return False, "El plan no contiene datos utilizables."
 
     dias = plan.get("dias", [])
     if len(dias) != int(dias_solicitados):
-        return False
+        return False, f"Se requieren exactamente {dias_solicitados} días y llegaron {len(dias)}."
 
-    esperadas = [normalizar_texto(x) for x in comidas_solicitadas]
+    ids_validos = {p["id"] for p in catalogo}
+    tipos_requeridos = {normalizar_texto(x) for x in comidas_solicitadas}
 
-    for indice, dia in enumerate(dias, 1):
-        if not isinstance(dia, dict):
-            return False
-
+    for i, dia in enumerate(dias, 1):
         comidas = dia.get("comidas", [])
-        if len(comidas) != len(esperadas):
-            return False
-
         tipos = [normalizar_texto(c.get("tipo")) for c in comidas]
-        if sorted(tipos) != sorted(esperadas):
-            return False
+        if len(comidas) != len(comidas_solicitadas) or set(tipos) != tipos_requeridos:
+            return False, f"El día {i} no contiene exactamente las comidas solicitadas."
 
         for comida in comidas:
             if not comida.get("nombre"):
-                return False
-            if not comida.get("ingredientes"):
-                return False
-            if not comida.get("preparacion"):
-                return False
+                return False, f"Falta nombre en una comida del día {i}."
+            ingredientes = comida.get("ingredientes", [])
+            if len(ingredientes) < 2:
+                return False, f"Una comida del día {i} tiene menos de 2 ingredientes."
+            if len(comida.get("preparacion", [])) < 2:
+                return False, f"Una comida del día {i} tiene menos de 2 pasos."
+            for ing in ingredientes:
+                if ing.get("producto_id") not in ids_validos:
+                    return False, f"Hay un producto_id inválido en el día {i}."
+                try:
+                    if float(ing.get("cantidad_por_persona", 0)) <= 0:
+                        return False, f"Hay una cantidad inválida en el día {i}."
+                except Exception:
+                    return False, f"Hay una cantidad inválida en el día {i}."
 
-    return True
+    return True, "OK"
 
 
-def construir_prompt_reintento(prompt_original, dias, comidas):
-    """Solicita nuevamente el plan cuando la primera respuesta quedó incompleta."""
-    return f"""
-La respuesta anterior fue rechazada porque estaba INCOMPLETA.
+def construir_prompt_reintento(plan, dias, comidas, catalogo, motivo):
+    ids = ",".join(p["id"] for p in catalogo)
+    plan_compacto = json.dumps(plan, ensure_ascii=False, separators=(",", ":"))
+    comidas_texto = ", ".join(comidas)
+    return f"""Corrige este plan KashCook. Motivo: {motivo}
 
-Debes generar nuevamente el plan completo.
+Debe tener EXACTAMENTE {dias} días y cada día EXACTAMENTE estas comidas: {comidas_texto}. Cada comida: nombre, mínimo 2 ingredientes, mínimo 2 pasos. Cada ingrediente: producto_id válido, cantidad_por_persona > 0 y unidad compatible. Conserva el contenido útil del plan. Responde SOLO JSON.
 
-REQUISITOS OBLIGATORIOS:
-- Exactamente {dias} días.
-- Cada día debe contener exactamente estas comidas: {", ".join(comidas)}.
-- Cada comida debe tener nombre.
-- Cada comida debe tener al menos 2 ingredientes válidos del catálogo.
-- Cada comida debe tener preparación con al menos 3 pasos.
-- Cada ingrediente debe tener producto_id, cantidad_por_persona y unidad.
-- No omitas días.
-- No omitas comidas.
-- Devuelve exclusivamente JSON válido.
+IDs válidos:
+{ids}
 
-INSTRUCCIONES ORIGINALES:
-{prompt_original}
+PLAN:
+{plan_compacto}
 
-ANTES DE RESPONDER, verifica internamente:
-1. Que existan exactamente {dias} objetos dentro de "dias".
-2. Que cada objeto tenga exactamente las comidas solicitadas.
-3. Que ninguna comida esté vacía.
-4. Que todos los ingredientes utilicen IDs del catálogo.
-5. Que el JSON esté completo y cerrado.
-"""
+Estructura: {{"dias":[{{"dia":1,"comidas":[{{"tipo":"Desayuno","nombre":"...","ingredientes":[{{"producto_id":"ID","cantidad_por_persona":2,"unidad":"pieza"}}],"preparacion":["Paso 1","Paso 2"]}}]}}]}}"""
 
 
 # ============================================================
@@ -1797,220 +1759,53 @@ def construir_prompt(
     catalogo,
 ):
 
-    catalogo_texto = []
-
+    # Formato compacto: conserva todos los productos y datos que la IA
+    # necesita, pero evita repetir claves JSON y textos largos.
+    catalogo_lineas = []
     for p in catalogo:
-
-        catalogo_texto.append(
-            {
-                "id": p["id"],
-                "tienda": p["tienda"],
-                "producto": p["nombre"],
-                "categoria": p["categoria"],
-                "ingrediente_base": p[
-                    "ingrediente_base"
-                ],
-                "presentacion": p[
-                    "presentacion"
-                ],
-                "contenido": p[
-                    "contenido"
-                ],
-                "unidad_contenido": p[
-                    "unidad_contenido"
-                ],
-                "precio": p["precio"],
-            }
+        catalogo_lineas.append(
+            f"{p['id']}|{p['tienda']}|{p['ingrediente_base']}|"
+            f"{p['nombre']}|{p['contenido']}{p['unidad_contenido']}|"
+            f"{p['precio']}"
         )
 
-    return f"""
-Eres KashCook AI.
+    comidas_texto = ", ".join(comidas)
+    estilos_texto = ", ".join(estilos) if estilos else "Libre"
+    electro_texto = ", ".join(electrodomesticos) if electrodomesticos else "Cocina convencional"
+    restr_texto = restricciones.strip() if restricciones else "Ninguna"
 
-Crea un plan de alimentación familiar para:
+    return f"""Eres KashCook AI. Crea un plan de alimentación para {personas} personas durante EXACTAMENTE {dias} días.
 
-PERSONAS:
-{personas}
+Presupuesto: ${presupuesto:.2f} MXN. Límite absoluto: ${presupuesto + TOLERANCIA_PRESUPUESTO:.2f}.
+Tiendas permitidas: {', '.join(tiendas)}. NO compares precios ni recomiendes una tienda por precio.
+Estilos: {estilos_texto}. Comidas obligatorias cada día: {comidas_texto}.
+Electrodomésticos: {electro_texto}. Restricciones/alergias: {restr_texto}.
 
-DÍAS:
-{dias}
+REGLAS:
+- Usa SOLO productos del catálogo y SOLO tiendas permitidas.
+- Las cantidades son POR PERSONA; el sistema las multiplicará por {personas}.
+- Porciones principales orientativas: pollo sin hueso 180-220 g; pollo con hueso 250-350 g; res/cerdo 160-220 g; pescado 180-220 g; huevo 2-4 piezas. Atún y sardina: porción realista.
+- Varía proteínas: pollo, res, cerdo, pescado, atún, sardina y huevo cuando sea compatible con días, comidas y restricciones. No hagas todo a base de pollo.
+- Varía recetas y usa acompañamientos/verduras adecuados.
+- No inventes productos ni precios.
+- Objetivo: usar aproximadamente 90-100% del presupuesto cuando sea posible. Puede quedar por debajo; nunca superes el límite absoluto.
+- Cada día debe contener EXACTAMENTE las comidas solicitadas, sin omitir ninguna.
+- Cada comida necesita nombre, al menos 2 ingredientes y al menos 2 pasos de preparación.
+- Cada ingrediente necesita producto_id EXACTO del catálogo, cantidad_por_persona numérica y unidad compatible.
 
-PRESUPUESTO:
-${presupuesto:.2f} MXN
+CATÁLOGO (id|tienda|ingrediente|producto|contenido|precio):
+{chr(10).join(catalogo_lineas)}
 
-TIENDAS SELECCIONADAS:
-{", ".join(tiendas)}
+RESPONDE SOLO CON JSON con esta forma:
+{{"dias":[{{"dia":1,"comidas":[{{"tipo":"Desayuno","nombre":"...","ingredientes":[{{"producto_id":"ID","cantidad_por_persona":200,"unidad":"g"}}],"preparacion":["Paso 1","Paso 2"]}}]}}]}}
 
-ESTILOS:
-{", ".join(estilos) if estilos else "Libre"}
-
-COMIDAS:
-{", ".join(comidas)}
-
-ELECTRODOMÉSTICOS:
-{", ".join(electrodomesticos) if electrodomesticos else "Cocina convencional"}
-
-RESTRICCIONES:
-{restricciones if restricciones else "Ninguna"}
-
-============================================================
-REGLAS DE KASHCOOK
-============================================================
-
-1. UTILIZA EXCLUSIVAMENTE productos del catálogo.
-
-2. Las únicas tiendas permitidas son las seleccionadas.
-
-3. NO compares precios entre tiendas.
-
-4. NO recomiendes una tienda sobre otra por precio.
-
-5. Las cantidades deben ser POR PERSONA.
-
-6. KashCook multiplicará automáticamente las cantidades
-   por el número de personas.
-
-7. Debes utilizar cantidades REALISTAS.
-
-8. Una comida principal debe proporcionar una porción
-   adecuada para una persona.
-
-PORCIONES ORIENTATIVAS:
-
-Pollo sin hueso:
-180-220 g por persona.
-
-Pollo con hueso:
-250-350 g por persona.
-
-Res:
-160-220 g por persona.
-
-Cerdo:
-160-220 g por persona.
-
-Pescado:
-180-220 g por persona.
-
-Atún:
-una cantidad suficiente para una porción real.
-
-Sardina:
-una cantidad suficiente para una porción real.
-
-Huevo:
-2-4 piezas por persona dependiendo de la receta.
-
-9. NO hagas todo el menú a base de pollo.
-
-10. Varía las proteínas.
-
-Procura utilizar:
-pollo,
-res,
-cerdo,
-pescado,
-atún,
-sardina,
-huevo.
-
-11. Evita repetir exactamente las mismas recetas.
-
-12. Utiliza acompañamientos suficientes.
-
-13. Utiliza verduras cuando tenga sentido.
-
-14. Respeta las restricciones y alergias.
-
-15. El objetivo económico es utilizar aproximadamente
-entre 90% y 100% del presupuesto.
-
-16. NO es obligatorio gastar exactamente el presupuesto.
-
-17. Puedes utilizar hasta $100 adicionales.
-
-18. JAMÁS superes:
-
-${presupuesto + TOLERANCIA_PRESUPUESTO:.2f} MXN
-
-19. Los precios del catálogo son los precios que debes utilizar.
-
-20. NO inventes productos.
-
-21. NO inventes precios.
-
-22. Cada comida debe tener ingredientes.
-
-23. Cada ingrediente debe utilizar un producto_id EXACTO
-del catálogo.
-
-24. Cada comida debe incluir preparación.
-
-25. Las preparaciones deben ser claras y cocinables.
-
-26. DEBES devolver EXACTAMENTE el número de días solicitado.
-
-27. CADA día debe contener EXACTAMENTE todas las comidas solicitadas.
-
-28. NO puedes omitir ningún día ni ninguna comida solicitada.
-
-29. Antes de responder, verifica que el JSON tenga todos los días y comidas requeridos.
-
-============================================================
-CATÁLOGO
-============================================================
-
-{json.dumps(
-    catalogo_texto,
-    ensure_ascii=False,
-    indent=2
-)}
-
-============================================================
-FORMATO
-============================================================
-
-Devuelve EXCLUSIVAMENTE JSON válido.
-
-Utiliza exactamente esta estructura:
-
-{{
-  "dias": [
-    {{
-      "dia": 1,
-      "comidas": [
-        {{
-          "tipo": "Desayuno",
-          "nombre": "Nombre de la receta",
-          "ingredientes": [
-            {{
-              "producto_id": "ID_EXACTO_DEL_CATALOGO",
-              "cantidad_por_persona": 2,
-              "unidad": "pieza"
-            }}
-          ],
-          "preparacion": [
-            "Paso 1",
-            "Paso 2",
-            "Paso 3"
-          ]
-        }}
-      ]
-    }}
-  ]
-}}
-
-MUY IMPORTANTE:
-
-- cantidad_por_persona debe ser numérica.
-- producto_id debe existir exactamente en el catálogo.
-- unidad debe corresponder al producto.
-- No agregues texto fuera del JSON.
-"""
+Debes entregar EXACTAMENTE {dias} días y en cada día EXACTAMENTE: {comidas_texto}. Verifica esto antes de responder."""
 
 
 # ============================================================
 # PROMPT DE AJUSTE
 # ============================================================
+
 
 def construir_prompt_ajuste(
     plan,
@@ -2022,150 +1817,48 @@ def construir_prompt_ajuste(
     modo,
 ):
 
-    catalogo_texto = []
-
+    catalogo_lineas = []
     for p in catalogo:
-
-        catalogo_texto.append(
-            {
-                "id": p["id"],
-                "producto": p["nombre"],
-                "ingrediente_base": p[
-                    "ingrediente_base"
-                ],
-                "presentacion": p[
-                    "presentacion"
-                ],
-                "contenido": p[
-                    "contenido"
-                ],
-                "unidad_contenido": p[
-                    "unidad_contenido"
-                ],
-                "precio": p["precio"],
-            }
+        catalogo_lineas.append(
+            f"{p['id']}|{p['tienda']}|{p['ingrediente_base']}|"
+            f"{p['nombre']}|{p['contenido']}{p['unidad_contenido']}|{p['precio']}"
         )
 
+    plan_compacto = json.dumps(plan, ensure_ascii=False, separators=(",", ":"))
+
     if modo == "subir":
-
-        instruccion = f"""
-El costo calculado actual es:
-
-${total:.2f}
-
-El presupuesto es:
-
-${presupuesto:.2f}
-
-El costo está demasiado por debajo del presupuesto.
-
-Debes mejorar el menú para utilizar aproximadamente
-entre 90% y 100% del presupuesto.
-
-No agregues productos absurdamente.
-
-Mejora las cantidades reales de alimentos,
-acompañamientos, verduras y variedad de proteínas.
-
-Mantén las porciones adecuadas para:
-{personas} personas.
-
-El nuevo costo NO puede superar:
-
-${presupuesto + TOLERANCIA_PRESUPUESTO:.2f}
-"""
-
+        objetivo = (
+            f"El total actual es ${total:.2f}. Está por debajo del objetivo. "
+            f"Mejora cantidades/acompañamientos/variedad para acercarte a "
+            f"${presupuesto:.2f}, sin superar ${presupuesto + TOLERANCIA_PRESUPUESTO:.2f}."
+        )
     else:
+        objetivo = (
+            f"El total actual es ${total:.2f}. Debes reducirlo a máximo "
+            f"${presupuesto + TOLERANCIA_PRESUPUESTO:.2f}, manteniendo porciones reales "
+            f"para {personas} personas y sin eliminar proteínas de forma absurda."
+        )
 
-        instruccion = f"""
-El costo calculado actual es:
+    return f"""Eres KashCook AI y debes AJUSTAR un plan existente.
+{objetivo}
 
-${total:.2f}
+Conserva EXACTAMENTE la estructura actual de días y tipos de comida. No omitas ni agregues días o comidas. Las cantidades siguen siendo por persona. Usa SOLO IDs del catálogo. NO compares tiendas.
 
-El presupuesto original es:
-
-${presupuesto:.2f}
-
-El máximo absoluto permitido es:
-
-${presupuesto + TOLERANCIA_PRESUPUESTO:.2f}
-
-Debes reducir el costo.
-
-Mantén porciones adecuadas para:
-{personas} personas.
-
-No elimines las proteínas principales de manera absurda.
-
-No reduzcas las cantidades a porciones irreales.
-"""
-
-    return f"""
-Eres KashCook AI.
-
-Estás corrigiendo un plan de alimentación.
-
-{instruccion}
-
-CATÁLOGO:
-
-{json.dumps(
-    catalogo_texto,
-    ensure_ascii=False,
-    indent=2
-)}
+CATÁLOGO id|tienda|ingrediente|producto|contenido|precio:
+{chr(10).join(catalogo_lineas)}
 
 PLAN ACTUAL:
-
-{json.dumps(
-    plan,
-    ensure_ascii=False,
-    indent=2
-)}
+{plan_compacto}
 
 COMPRA ACTUAL:
+{json.dumps(compra, ensure_ascii=False, separators=(",", ":"))}
 
-{json.dumps(
-    compra,
-    ensure_ascii=False,
-    indent=2
-)}
-
-Devuelve exclusivamente JSON válido.
-
-Utiliza:
-
-{{
-  "dias": [
-    {{
-      "dia": 1,
-      "comidas": [
-        {{
-          "tipo": "Comida",
-          "nombre": "Nombre",
-          "ingredientes": [
-            {{
-              "producto_id": "ID_EXACTO",
-              "cantidad_por_persona": 200,
-              "unidad": "g"
-            }}
-          ],
-          "preparacion": [
-            "Paso 1",
-            "Paso 2"
-          ]
-        }}
-      ]
-    }}
-  ]
-}}
-
-No agregues texto fuera del JSON.
-"""
+Devuelve SOLO JSON válido en la misma estructura del plan. Cada comida debe conservar nombre, al menos 2 ingredientes y al menos 2 pasos."""
 
 
 # ============================================================
 # GENERAR PDF
+
 # ============================================================
 
 def generar_pdf(
@@ -2942,44 +2635,27 @@ if st.button(
                 plan_raw
             )
 
-            # La primera respuesta debe estar completa. Si no lo está,
-            # hacemos un segundo intento específicamente para reparar
-            # días/comidas faltantes antes de continuar.
-            if not validar_plan_completo(
-                plan,
-                dias,
-                comidas,
-            ):
+            valido, motivo = validar_plan_completo(
+                plan, dias, comidas, catalogo
+            )
+
+            if not valido:
+                # Una segunda llamada pequeña corrige omisiones sin reenviar
+                # todo el catálogo descriptivo.
                 prompt_reintento = construir_prompt_reintento(
-                    prompt_original=prompt,
-                    dias=dias,
-                    comidas=comidas,
+                    plan, dias, comidas, catalogo, motivo
                 )
-
                 respuesta_reintento = llamar_groq(
-                    cliente,
-                    prompt_reintento,
-                    temperatura=0.25,
+                    cliente, prompt_reintento, temperatura=0.20
                 )
-
-                plan_reintento_raw = extraer_json(
-                    respuesta_reintento
+                plan = normalizar_plan(extraer_json(respuesta_reintento))
+                valido, motivo = validar_plan_completo(
+                    plan, dias, comidas, catalogo
                 )
-
-                plan = normalizar_plan(
-                    plan_reintento_raw
-                )
-
-            if not validar_plan_completo(
-                plan,
-                dias,
-                comidas,
-            ):
-                raise ValueError(
-                    "La IA devolvió un plan incompleto. "
-                    f"Se requieren exactamente {dias} día(s) "
-                    f"con las comidas: {', '.join(comidas)}."
-                )
+                if not valido:
+                    raise ValueError(
+                        f"La IA devolvió un plan incompleto: {motivo}"
+                    )
 
             # =================================================
             # CALCULAR COMPRA REAL
@@ -3028,9 +2704,11 @@ if st.button(
                         plan_ajustado_raw
                     )
 
-                    if validar_plan(
-                        plan_ajustado
-                    ):
+                    valido_ajuste, _ = validar_plan_completo(
+                        plan_ajustado, dias, comidas, catalogo
+                    )
+
+                    if valido_ajuste:
 
                         compra_ajustada, total_ajustado = calcular_compra(
                             plan_ajustado,
@@ -3089,9 +2767,11 @@ if st.button(
                         plan_ajustado_raw
                     )
 
-                    if validar_plan(
-                        plan_ajustado
-                    ):
+                    valido_ajuste, _ = validar_plan_completo(
+                        plan_ajustado, dias, comidas, catalogo
+                    )
+
+                    if valido_ajuste:
 
                         compra_ajustada, total_ajustado = calcular_compra(
                             plan_ajustado,
@@ -3455,4 +3135,3 @@ if "plan" in st.session_state:
         file_name="KashCook_AI_Plan.pdf",
         mime="application/pdf",
         use_container_width=True,
-    )
