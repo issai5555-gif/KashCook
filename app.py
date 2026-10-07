@@ -2499,74 +2499,346 @@ def _costo_plan(plan,catalogo,personas):
 
 
 def _receta_coincide_estilos(recipe_id, estilos):
-    """Devuelve si una receta pertenece a alguno de los estilos/cocinas elegidos."""
+    """Filtra por cocina/estilo real; si no hay filtro, deja pasar todo."""
     if not estilos:
         return True
-    r=RECETAS_REALES[recipe_id]
-    return bool(set(estilos) & set(r.get("estilos", [])))
+    r = RECETAS_REALES[recipe_id]
+    etiquetas = set(r.get("estilos", []))
+    etiquetas.add(r.get("cocina", "Mexicana"))
+    return bool(etiquetas.intersection(set(estilos)))
 
-def _generar_plan_local(dias, personas, presupuesto, comidas, catalogo, estilos=None):
-    """Genera menús reales, variados, con rotación de cocinas y estilos."""
+
+def _receta_bases(recipe_id):
+    return {x[0] for x in RECETAS_REALES[recipe_id].get("ingredientes", [])}
+
+
+def _receta_compatible(recipe_id, electrodomesticos=None, restricciones=""):
+    """Aplica restricciones sencillas y conservadoras sin inventar equivalencias."""
+    r = RECETAS_REALES[recipe_id]
+    bases = _receta_bases(recipe_id)
+    texto = (restricciones or "").lower()
+
+    # Restricciones explícitas frecuentes. No intentamos interpretar una frase
+    # ambigua como una alergia: solo bloqueamos cuando hay una coincidencia clara.
+    bloqueos = {
+        "pollo": {"pollo"},
+        "res": {"res", "molida"},
+        "carne de res": {"res", "molida"},
+        "cerdo": {"puerco"},
+        "puerco": {"puerco"},
+        "pescado": {"pescado"},
+        "atun": {"atun"},
+        "atún": {"atun"},
+        "sardina": {"sardina"},
+        "huevo": {"huevo"},
+        "huevos": {"huevo"},
+        "queso": {"queso"},
+        "lacteo": {"queso", "huevo"},
+        "lácteo": {"queso", "huevo"},
+        "tortilla": {"tortilla"},
+        "arroz": {"arroz"},
+        "frijol": {"frijol"},
+        "papa": {"papa"},
+    }
+    for palabra, ingredientes in bloqueos.items():
+        if palabra in texto and bases.intersection(ingredientes):
+            return False
+
+    # Vegetariano/vegano: el catálogo actual permite una interpretación
+    # conservadora basada en ingredientes, sin sustituir proteínas por cuenta propia.
+    if "vegano" in texto or "vegana" in texto:
+        if bases.intersection({"huevo", "queso", "pollo", "res", "molida", "puerco", "pescado", "atun", "sardina"}):
+            return False
+    if "vegetariano" in texto or "vegetariana" in texto:
+        if bases.intersection({"pollo", "res", "molida", "puerco", "pescado", "atun", "sardina"}):
+            return False
+
+    # Picante: las recetas de esta biblioteca no requieren chile explícito,
+    # por lo que no se bloquean por esta palabra.
+    return True
+
+
+def _receta_a_comida(recipe_id, catalogo, tipo):
+    r = RECETAS_REALES[recipe_id]
+    ingredientes = []
+    for base, cantidad, unidad in r["ingredientes"]:
+        p = _producto_para_base(base, catalogo)
+        if not p:
+            return None
+        ingredientes.append({
+            "producto_id": p["id"],
+            "cantidad_por_persona": cantidad,
+            "unidad": unidad,
+        })
+    return {
+        "tipo": tipo,
+        "nombre": r["nombre"],
+        "ingredientes": ingredientes,
+        "preparacion": r["pasos"],
+        "fuente": r["fuente"],
+    }
+
+
+def _plan_con_recetas(ids, catalogo, comidas):
+    dias = []
+    for i, slot in enumerate(ids, 1):
+        c = []
+        for tipo, rid in zip(comidas, slot):
+            comida = _receta_a_comida(rid, catalogo, tipo)
+            if comida is None:
+                return None
+            c.append(comida)
+        dias.append({"dia": i, "comidas": c})
+    return {"dias": dias}
+
+
+def _costo_plan(plan, catalogo, personas):
+    try:
+        _, total = calcular_compra(plan, catalogo, personas)
+        return total
+    except Exception:
+        return 10**12
+
+
+def _resumen_restricciones(restricciones):
+    t = (restricciones or "").strip()
+    return t if t else "Ninguna"
+
+
+def _generar_plan_local(
+    dias,
+    personas,
+    presupuesto,
+    comidas,
+    catalogo,
+    estilos=None,
+    electrodomesticos=None,
+    restricciones="",
+):
+    """Motor local de KashCook: recetas reales + variedad + compras agrupadas.
+
+    La optimización se hace sobre el menú completo, no comida por comida. Esto
+    permite reutilizar ingredientes y comprar una presentación una sola vez.
+    """
     import random
     from datetime import date
-    estilos=estilos or []
-    candidatos_des=[r for r in DESAYUNOS if _receta_coincide_estilos(r,estilos) and _receta_a_comida(r,catalogo,"Desayuno")]
-    candidatos_pl=[r for r in PLATOS if _receta_coincide_estilos(r,estilos) and _receta_a_comida(r,catalogo,"Comida")]
-    if not candidatos_des or not candidatos_pl:
-        # Si la combinación de filtros deja un hueco, permitimos recetas de cocina
-        # cercana pero no ignoramos las preferencias por completo.
-        candidatos_des=[r for r in DESAYUNOS if _receta_a_comida(r,catalogo,"Desayuno")]
-        candidatos_pl=[r for r in PLATOS if _receta_a_comida(r,catalogo,"Comida")]
-    if not candidatos_des or not candidatos_pl:
-        raise ValueError("No hay suficientes recetas compatibles con los productos de las tiendas seleccionadas.")
-    iso=date.today().isocalendar()
-    semana_seed=(int(iso.year)*100+int(iso.week))*1000003
-    sesion=int(st.session_state.get("kc_semilla_menu",0))
+
+    estilos = estilos or []
+    electrodomesticos = electrodomesticos or ["Estufa"]
+
+    # Esta biblioteca actual está diseñada para cocina de estufa. Si el usuario
+    # dispone de estufa, todos los platos base son posibles. Para otros equipos
+    # se conservan como adicionales, no se inventan recetas que dependan de ellos.
+    tiene_estufa = "Estufa" in electrodomesticos
+
+    def compatible(rid, tipo):
+        if tipo == "Desayuno":
+            if rid not in DESAYUNOS:
+                return False
+        elif rid not in PLATOS:
+            return False
+        if not _receta_coincide_estilos(rid, estilos):
+            return False
+        if not _receta_compatible(rid, electrodomesticos, restricciones):
+            return False
+        # Sin estufa, solo permitir recetas explícitamente marcadas para otro
+        # equipo. Las recetas actuales no tienen esa dependencia, por seguridad.
+        if not tiene_estufa and "electrodomestico" not in RECETAS_REALES[rid]:
+            return False
+        return _receta_a_comida(rid, catalogo, tipo) is not None
+
+    candidatos_des = [r for r in DESAYUNOS if compatible(r, "Desayuno")]
+    candidatos_pl = [r for r in PLATOS if compatible(r, "Comida")]
+
+    # Si un filtro muy específico deja una categoría sin recetas, no vamos a
+    # inventar sustituciones. Primero se informa de forma clara.
+    if not candidatos_des and "Desayuno" in comidas:
+        raise ValueError("No hay desayunos reales compatibles con los estilos, tiendas y restricciones seleccionados.")
+    if not candidatos_pl and any(x in comidas for x in ("Comida", "Cena")):
+        raise ValueError("No hay comidas/cenas reales compatibles con los estilos, tiendas y restricciones seleccionados.")
+
+    pools = {"Desayuno": candidatos_des, "Comida": candidatos_pl, "Cena": candidatos_pl}
+
+    iso = date.today().isocalendar()
+    semana_seed = (int(iso.year) * 100 + int(iso.week)) * 1000003
+    sesion = int(st.session_state.get("kc_semilla_menu", 0))
     if not sesion:
-        sesion=random.SystemRandom().randint(1,10**9); st.session_state["kc_semilla_menu"]=sesion
-    rng=random.Random(semana_seed+sesion+int(dias)*31+int(personas)*17+int(presupuesto))
-    mejor=None; mejor_score=-10**18
-    for _ in range(4500):
-        usados=set(); slots=[]
-        for d in range(dias):
-            fila=[]
+        sesion = random.SystemRandom().randint(1, 10**9)
+        st.session_state["kc_semilla_menu"] = sesion
+    rng = random.Random(semana_seed + sesion + int(dias) * 31 + int(personas) * 17 + int(presupuesto))
+
+    # Se calculan costos individuales como referencia para favorecer recetas
+    # económicas, pero la decisión final siempre usa la compra agrupada completa.
+    costo_individual = {}
+    for rid in set(candidatos_des + candidatos_pl):
+        c = _receta_a_comida(rid, catalogo, "Comida" if rid in candidatos_pl else "Desayuno")
+        if c:
+            costo_individual[rid] = _costo_plan({"dias":[{"dia":1,"comidas":[c]}]}, catalogo, personas)
+
+    total_slots = int(dias) * len(comidas)
+    max_repeticiones = max(1, int(math.ceil(total_slots / max(1, len(set(candidatos_des + candidatos_pl))))))
+
+    mejor_factible = None
+    mejor_factible_score = -10**18
+    mejor_global = None
+    mejor_global_score = -10**18
+
+    # Muchas combinaciones pequeñas son más útiles que una sola llamada enorme
+    # al LLM y no dependen de un JSON de siete días.
+    for _ in range(5000):
+        usados = []
+        slots = []
+        conteo = {}
+        for d in range(int(dias)):
+            fila = []
             for tipo in comidas:
-                pool=candidatos_des if tipo=="Desayuno" else candidatos_pl
-                disponibles=[x for x in pool if x not in usados]
+                pool = pools[tipo]
+                if not pool:
+                    fila = None
+                    break
+
+                # Primero evitamos cualquier receta usada en los últimos 3 días
+                # y, mientras exista inventario, evitamos cualquier repetición.
+                recientes = {x for row in slots[-3:] for x in row}
+                disponibles = [x for x in pool if x not in recientes and conteo.get(x, 0) < max_repeticiones]
                 if not disponibles:
-                    recientes={x for row in slots[-3:] for x in row}
-                    disponibles=[x for x in pool if x not in recientes] or pool
-                rid=rng.choice(disponibles); fila.append(rid); usados.add(rid)
+                    disponibles = [x for x in pool if conteo.get(x, 0) < max_repeticiones]
+                if not disponibles:
+                    disponibles = pool
+
+                # Con múltiples cocinas, sesgamos la selección hacia las que aún
+                # no aparecen en el menú para que la elección del usuario tenga efecto real.
+                elegibles = disponibles
+                if len(estilos) > 1:
+                    faltantes = [
+                        x for x in disponibles
+                        if RECETAS_REALES[x].get("cocina", "Mexicana") in estilos
+                        and RECETAS_REALES[x].get("cocina", "Mexicana") not in {
+                            RECETAS_REALES[y].get("cocina", "Mexicana") for y in usados
+                        }
+                    ]
+                    if faltantes and rng.random() < 0.72:
+                        elegibles = faltantes
+
+                # Una pequeña preferencia económica evita que el presupuesto se
+                # consuma demasiado pronto, sin convertir el menú en comida repetitiva.
+                elegibles = sorted(
+                    elegibles,
+                    key=lambda x: (costo_individual.get(x, 10**9) * (0.75 + rng.random() * 0.5))
+                )[:max(5, min(14, len(elegibles)))]
+                rid = rng.choice(elegibles)
+                fila.append(rid)
+                usados.append(rid)
+                conteo[rid] = conteo.get(rid, 0) + 1
+            if fila is None:
+                break
             slots.append(fila)
-        plan=_plan_con_recetas(slots,catalogo,comidas)
-        if not plan: continue
-        nombres=[RECETAS_REALES[r]["nombre"].lower() for row in slots for r in row]
-        tortilla_count=sum(any(x in n for x in ("tortilla","quesadilla","enfrijolada","taco","enchilada","flauta","chilaquiles")) for n in nombres)
-        if tortilla_count>max(5,int(dias*len(comidas)*.30)): continue
-        total=_costo_plan(plan,catalogo,personas)
-        if total>presupuesto+TOLERANCIA_PRESUPUESTO: continue
-        variedad=len(set(x for row in slots for x in row)); repet=len(slots)*len(comidas)-variedad
-        cocinas=[RECETAS_REALES[x].get("cocina","Mexicana") for row in slots for x in row]
-        cocinas_distintas=len(set(cocinas))
-        estilos_cumplidos=len(set(cocinas) & set(estilos)) if estilos else cocinas_distintas
-        # La variedad de cocina pesa casi tanto como no repetir platos.
-        # Si el usuario eligió varias cocinas, intentamos utilizar varias.
-        score=variedad*35-repet*220+cocinas_distintas*45+estilos_cumplidos*35+rng.random()*30
-        if len(set(estilos) & set(cocinas)) > 1:
-            score += 80 * len(set(estilos) & set(cocinas))
-        if total<=presupuesto: score+=250-(presupuesto-total)*.2
-        else: score-=10000+(total-presupuesto)*10
-        if score>mejor_score: mejor_score=score; mejor=(plan,total)
-    if mejor: return mejor
-    raise ValueError(f"El presupuesto de ${presupuesto:,.2f} no alcanza para {dias} días y {personas} persona(s) con las presentaciones disponibles. KashCook no va a inventar precios ni reducir las porciones a niveles irreales. Aumenta el presupuesto, reduce días/personas o cambia la selección de tiendas.")
+
+        if len(slots) != int(dias):
+            continue
+
+        plan = _plan_con_recetas(slots, catalogo, comidas)
+        if not plan:
+            continue
+
+        nombres = [RECETAS_REALES[r]["nombre"].lower() for row in slots for r in row]
+        tortilla_count = sum(
+            any(x in n for x in ("tortilla", "quesadilla", "enfrijolada", "taco", "enchilada", "flauta", "chilaquiles"))
+            for n in nombres
+        )
+        if tortilla_count > max(5, int(total_slots * 0.30)):
+            continue
+
+        total = _costo_plan(plan, catalogo, personas)
+        cocinas = [RECETAS_REALES[x].get("cocina", "Mexicana") for row in slots for x in row]
+        cocinas_usadas = set(cocinas)
+        recetas_distintas = len(set(x for row in slots for x in row))
+        repeticiones = total_slots - recetas_distintas
+        proteínas = []
+        for row in slots:
+            for x in row:
+                b = _receta_bases(x)
+                if "pollo" in b: proteínas.append("pollo")
+                elif b.intersection({"res", "molida"}): proteínas.append("res")
+                elif "puerco" in b: proteínas.append("cerdo")
+                elif "pescado" in b: proteínas.append("pescado")
+                elif "atun" in b: proteínas.append("atun")
+                elif "sardina" in b: proteínas.append("sardina")
+                elif "huevo" in b: proteínas.append("huevo")
+                else: proteínas.append("vegetal")
+        variedad_proteina = len(set(proteínas))
+        cocinas_objetivo = len(cocinas_usadas.intersection(set(estilos))) if estilos else len(cocinas_usadas)
+
+        # Puntuación: primero viabilidad económica, luego variedad y cumplimiento.
+        score = (
+            recetas_distintas * 55
+            - repeticiones * 210
+            + len(cocinas_usadas) * 65
+            + cocinas_objetivo * 85
+            + variedad_proteina * 60
+            - tortilla_count * 18
+            + rng.random() * 25
+        )
+        if total <= presupuesto:
+            score += 5000 - max(0, presupuesto - total) * 0.25
+        else:
+            score -= (total - presupuesto) * 18
+
+        candidato = (plan, total, score)
+        if score > mejor_global_score:
+            mejor_global_score = score
+            mejor_global = candidato
+
+        if total <= presupuesto + TOLERANCIA_PRESUPUESTO and score > mejor_factible_score:
+            mejor_factible_score = score
+            mejor_factible = candidato
+
+    if mejor_factible:
+        return mejor_factible[0], round(mejor_factible[1], 2)
+
+    # No mentimos si el presupuesto no alcanza. Buscamos el plan más barato
+    # encontrado y lo reportamos para que el usuario sepa cuánto falta realmente.
+    if mejor_global:
+        minimo = round(mejor_global[1], 2)
+        faltante = max(0, minimo - float(presupuesto))
+        raise ValueError(
+            f"No encontré una combinación real que cumpla el menú completo dentro de ${presupuesto:,.2f}. "
+            f"La mejor combinación encontrada cuesta aproximadamente ${minimo:,.2f}; faltan ${faltante:,.2f}. "
+            "KashCook no va a inventar precios ni reducir las porciones para hacer que parezca que alcanza. "
+            "Prueba con más presupuesto, menos días/personas o menos comidas por día."
+        )
+
+    raise ValueError("No fue posible construir un menú con las recetas, tiendas y restricciones seleccionadas.")
 
 
-def generar_plan_seguro(dias,personas,presupuesto,comidas,catalogo,estilos=None):
-    plan,total=_generar_plan_local(dias,personas,presupuesto,comidas,catalogo,estilos)
-    valido,motivo=validar_plan_completo(plan,dias,comidas,catalogo)
+def generar_plan_seguro(
+    dias,
+    personas,
+    presupuesto,
+    comidas,
+    catalogo,
+    estilos=None,
+    electrodomesticos=None,
+    restricciones="",
+):
+    plan, total = _generar_plan_local(
+        dias=dias,
+        personas=personas,
+        presupuesto=presupuesto,
+        comidas=comidas,
+        catalogo=catalogo,
+        estilos=estilos,
+        electrodomesticos=electrodomesticos,
+        restricciones=restricciones,
+    )
+    valido, motivo = validar_plan_completo(plan, dias, comidas, catalogo)
     if not valido:
         raise ValueError(motivo)
-    return plan,total
+    if total > presupuesto + TOLERANCIA_PRESUPUESTO:
+        raise ValueError(
+            f"El total calculado (${total:,.2f}) supera el presupuesto permitido (${presupuesto:,.2f})."
+        )
+    return plan, total
 
 # ============================================================
 # INTERFAZ — KASHCOOK AI
@@ -2652,7 +2924,7 @@ if generar_menu:
         st.stop()
     with st.spinner("KashCook está construyendo un menú real y ajustándolo al presupuesto..."):
         try:
-            plan,total=generar_plan_seguro(dias=int(dias),personas=int(personas),presupuesto=float(presupuesto),comidas=comidas,catalogo=catalogo,estilos=estilos)
+            plan,total=generar_plan_seguro(dias=int(dias),personas=int(personas),presupuesto=float(presupuesto),comidas=comidas,catalogo=catalogo,estilos=estilos,electrodomesticos=electrodomesticos,restricciones=restricciones)
             st.session_state["plan"]=plan
             st.session_state["compra"]=calcular_compra(plan,catalogo,personas)[0]
             st.session_state["total"]=total
