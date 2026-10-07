@@ -2392,7 +2392,66 @@ RECETAS_REALES = {
     "arroz_frijoles": {"tipo":"Cena","nombre":"Arroz con frijoles y queso fresco","fuente":"Cocina mexicana tradicional","ingredientes":[("arroz",0.09,"kg"),("frijol",0.10,"kg"),("queso",0.04,"kg"),("tomate",0.06,"kg"),("cebolla",0.02,"kg"),("aceite",8,"ml")],"pasos":["Prepara el arroz hasta que quede suelto.","Calienta los frijoles y sazónalos; pueden quedar enteros o ligeramente machacados.","Mezcla una parte del arroz con los frijoles o sírvelos por separado.","Termina con queso fresco y tomate y cebolla picados."]},
     "tacos_papa_queso": {"tipo":"Cena","nombre":"Tacos de papa con queso","fuente":"Cocina mexicana tradicional","ingredientes":[("tortilla",0.18,"kg"),("papa",0.22,"kg"),("queso",0.05,"kg"),("cebolla",0.02,"kg"),("aceite",12,"ml"),("frijol",0.10,"kg")],"pasos":["Cuece las papas y machácalas con cebolla picada.","Calienta las tortillas y rellénalas con papa y queso.","Dobla los tacos y dóralos en una sartén con poco aceite.","Sirve con frijoles calientes."]},
     "tortitas_papa_comida": {"tipo":"Comida","nombre":"Tortitas de papa con queso y frijoles","fuente":"Cocina mexicana tradicional","ingredientes":[("papa",0.25,"kg"),("queso",0.06,"kg"),("huevo",1,"pieza"),("cebolla",0.03,"kg"),("aceite",12,"ml"),("frijol",0.12,"kg"),("tomate",0.06,"kg")],"pasos":["Cuece y machaca las papas.","Mezcla con huevo, queso y cebolla; forma tortitas.","Dora las tortitas en poco aceite por ambos lados.","Sirve con frijoles y tomate picado."]},
-}
+    'chilaquiles_rojos': {"tipo":'Desayuno',"nombre":'Chilaquiles rojos con huevo y queso',"fuente":'Cocina mexicana casera',"ingredientes":[('tortilla', 0.18, 'kg'), ('tomate', 0.16, 'kg'), ('cebolla', 0.03, 'kg'), ('huevo', 2, 'pieza'), ('queso', 0.04, 'kg'), ('aceite', 10, 'ml')],"pasos":['Prepara los ingredientes de chilaquiles rojos con huevo y queso y cocina cada componente hasta que quede bien cocido.', 'Integra los ingredientes principales y deja que se mezclen los sabores a fuego medio.', 'Ajusta la sazón y termina la preparación con la guarnición indicada.', 'Sirve caliente y aprovecha las porciones completas para evitar desperdicios.']},
+    'omelette_calabacita': {"tipo":'Desayuno',"nombre":'Omelette de calabacita y queso',"fuente":'Cocina mexicana casera',"ingredientes":[('huevo', 2, 'pieza'), ('calabaza', 0.15, 'kg'), ('queso', 0.05, 'kg'), ('tomate', 0.05, 'kg'), ('cebolla', 0.02, 'kg'), ('aceite', 8, 'ml')],"pasos":['Prepara los ingredientes de omelette de calabacita y queso y cocina cada componente hasta que quede bien cocido.', 'Integra los ingredientes principales y deja que se mezclen los sabores a fuego medio.', 'Ajusta la sazón y termina la preparación con la guarnición indicada.', 'Sirve caliente y aprovecha las porciones completas para evitar desperdicios.']},
+    'huevos_arroz_frijol': {"tipo":'Desayuno',"nombre":'Huevos estrellados con arroz y frijoles',"fuente":'Cocina mexicana casera',"ingredientes":[('huevo', 2, 'pieza'), ('arroz', 0.1, 'kg'), ('frijol', 0.1, 'kg'), ('tomate', 0.06, 'kg'), ('cebolla', 0.02, 'kg'), ('aceite', 10, 'ml')],"pasos":['Prepara los ingredientes de huevos estrellados con arroz y frijoles y cocina cada componente hasta que quede bien cocido.', 'Integra los ingredientes principales y deja que se mezclen los sabores a fuego medio.', 'Ajusta la sazón y termina la preparación con la guarnición indicada.', 'Sirve caliente y aprovecha las porciones completas para evitar desperdicios.']},
+    'quesadillas_papa': {"tipo":'Desayuno',"nombre":'Quesadillas de papa con queso',"fuente":'Cocina mexicana casera',"ingredientes":[('tortilla', 0.16, 'kg'), ('papa', 0.18, 'kg'), ('queso', 0.06, 'kg'), ('cebolla', 0.02, 'kg'), ('tomate', 0.05, 'kg'), ('aceite', 8, 'ml')],"pasos":['Prepara los ingredientes de quesadillas de papa con queso y cocina cada componente hasta que quede bien cocido.', 'Integra los ingredientes principales y deja que se mezclen los sabores a fuego medio.', 'Ajusta la sazón y termina la preparación con la guarnición indicada.', 'Sirve caliente y aprovecha las porciones completas para evitar desperdicios.']},
+    'flautas_papa': {"tipo":'Desayuno',"nombre":'Flautas de papa con queso y lechuga',"fuente":'Cocina mexicana casera',"ingredientes":[('tortilla', 0.18, 'kg'), ('papa', 0.2, 'kg'), ('queso', 0.04, 'kg'), ('lechuga', 0.08, 'pieza'), ('tomate', 0.06, 'kg'), ('aceite', 14, 'ml')],"pasos":['Prepara los ingredientes de flautas de papa con queso y lechuga y cocina cada componente hasta que quede bien cocido.', 'Integra los ingredientes principales y deja que se mezclen los sabores a fuego medio.', 'Ajusta la sazón y termina la preparación con la guarnición indicada.', 'Sirve caliente y aprovecha las porciones completas para evitar desperdicios.']},
+    'huevos_tomate_papa': {"tipo":'Desayuno',"nombre":'Huevos con tomate, cebolla y papa',"fuente":'Cocina mexicana casera',"ingredientes":[('huevo', 2, 'pieza'), ('tomate', 0.14, 'kg'), ('cebolla', 0.05, 'kg'), ('papa', 0.1, 'kg'), ('tortilla', 0.1, 'kg'), ('aceite', 10, 'ml')],"pasos":['Prepara los ingredientes de huevos con tomate, cebolla y papa y cocina cada componente hasta que quede bien cocido.', 'Integra los ingredientes principales y deja que se mezclen los sabores a fuego medio.', 'Ajusta la sazón y termina la preparación con la guarnición indicada.', 'Sirve caliente y aprovecha las porciones completas para evitar desperdicios.']},
+    'tostadas_frijol_huevo': {"tipo":'Desayuno',"nombre":'Frijoles con huevo y queso sobre tortilla dorada',"fuente":'Cocina mexicana casera',"ingredientes":[('tortilla', 0.16, 'kg'), ('frijol', 0.12, 'kg'), ('huevo', 2, 'pieza'), ('queso', 0.04, 'kg'), ('tomate', 0.06, 'kg'), ('aceite', 10, 'ml')],"pasos":['Prepara los ingredientes de frijoles con huevo y queso sobre tortilla dorada y cocina cada componente hasta que quede bien cocido.', 'Integra los ingredientes principales y deja que se mezclen los sabores a fuego medio.', 'Ajusta la sazón y termina la preparación con la guarnición indicada.', 'Sirve caliente y aprovecha las porciones completas para evitar desperdicios.']},
+    'migas_mexicanas': {"tipo":'Desayuno',"nombre":'Migas mexicanas con huevo y queso',"fuente":'Cocina mexicana casera',"ingredientes":[('tortilla', 0.16, 'kg'), ('huevo', 2, 'pieza'), ('tomate', 0.08, 'kg'), ('cebolla', 0.03, 'kg'), ('queso', 0.04, 'kg'), ('aceite', 10, 'ml')],"pasos":['Prepara los ingredientes de migas mexicanas con huevo y queso y cocina cada componente hasta que quede bien cocido.', 'Integra los ingredientes principales y deja que se mezclen los sabores a fuego medio.', 'Ajusta la sazón y termina la preparación con la guarnición indicada.', 'Sirve caliente y aprovecha las porciones completas para evitar desperdicios.']},
+    'tinga_pollo': {"tipo":'Comida',"nombre":'Tinga de pollo casera',"fuente":'Cocina mexicana tradicional',"ingredientes":[('pollo', 0.2, 'kg'), ('tomate', 0.18, 'kg'), ('cebolla', 0.08, 'kg'), ('zanahoria', 0.06, 'kg'), ('aceite', 10, 'ml'), ('tortilla', 0.12, 'kg')],"pasos":['Prepara los ingredientes de tinga de pollo casera y cocina cada componente hasta que quede bien cocido.', 'Integra los ingredientes principales y deja que se mezclen los sabores a fuego medio.', 'Ajusta la sazón y termina la preparación con la guarnición indicada.', 'Sirve caliente y aprovecha las porciones completas para evitar desperdicios.']},
+    'albondigas': {"tipo":'Comida',"nombre":'Albóndigas de res en caldillo de tomate',"fuente":'Cocina mexicana tradicional',"ingredientes":[('molida', 0.18, 'kg'), ('arroz', 0.04, 'kg'), ('tomate', 0.18, 'kg'), ('cebolla', 0.05, 'kg'), ('zanahoria', 0.1, 'kg'), ('papa', 0.12, 'kg')],"pasos":['Prepara los ingredientes de albóndigas de res en caldillo de tomate y cocina cada componente hasta que quede bien cocido.', 'Integra los ingredientes principales y deja que se mezclen los sabores a fuego medio.', 'Ajusta la sazón y termina la preparación con la guarnición indicada.', 'Sirve caliente y aprovecha las porciones completas para evitar desperdicios.']},
+    'carne_molida_papas': {"tipo":'Comida',"nombre":'Carne molida con papas y zanahoria',"fuente":'Cocina mexicana tradicional',"ingredientes":[('molida', 0.18, 'kg'), ('papa', 0.2, 'kg'), ('zanahoria', 0.1, 'kg'), ('tomate', 0.14, 'kg'), ('cebolla', 0.04, 'kg'), ('aceite', 12, 'ml'), ('tortilla', 0.1, 'kg')],"pasos":['Prepara los ingredientes de carne molida con papas y zanahoria y cocina cada componente hasta que quede bien cocido.', 'Integra los ingredientes principales y deja que se mezclen los sabores a fuego medio.', 'Ajusta la sazón y termina la preparación con la guarnición indicada.', 'Sirve caliente y aprovecha las porciones completas para evitar desperdicios.']},
+    'pollo_papas': {"tipo":'Comida',"nombre":'Pollo con papas y zanahoria guisado',"fuente":'Cocina mexicana tradicional',"ingredientes":[('pollo', 0.2, 'kg'), ('papa', 0.2, 'kg'), ('zanahoria', 0.1, 'kg'), ('tomate', 0.14, 'kg'), ('cebolla', 0.04, 'kg'), ('aceite', 12, 'ml'), ('arroz', 0.08, 'kg')],"pasos":['Prepara los ingredientes de pollo con papas y zanahoria guisado y cocina cada componente hasta que quede bien cocido.', 'Integra los ingredientes principales y deja que se mezclen los sabores a fuego medio.', 'Ajusta la sazón y termina la preparación con la guarnición indicada.', 'Sirve caliente y aprovecha las porciones completas para evitar desperdicios.']},
+    'pollo_tomate_arroz': {"tipo":'Comida',"nombre":'Pollo guisado con tomate y arroz',"fuente":'Cocina mexicana tradicional',"ingredientes":[('pollo', 0.2, 'kg'), ('tomate', 0.18, 'kg'), ('cebolla', 0.04, 'kg'), ('zanahoria', 0.08, 'kg'), ('arroz', 0.09, 'kg'), ('aceite', 10, 'ml')],"pasos":['Prepara los ingredientes de pollo guisado con tomate y arroz y cocina cada componente hasta que quede bien cocido.', 'Integra los ingredientes principales y deja que se mezclen los sabores a fuego medio.', 'Ajusta la sazón y termina la preparación con la guarnición indicada.', 'Sirve caliente y aprovecha las porciones completas para evitar desperdicios.']},
+    'cerdo_papa_tomate': {"tipo":'Comida',"nombre":'Guisado de cerdo con tomate y papa',"fuente":'Cocina mexicana tradicional',"ingredientes":[('puerco', 0.18, 'kg'), ('papa', 0.2, 'kg'), ('tomate', 0.16, 'kg'), ('cebolla', 0.04, 'kg'), ('zanahoria', 0.08, 'kg'), ('aceite', 12, 'ml'), ('tortilla', 0.1, 'kg')],"pasos":['Prepara los ingredientes de guisado de cerdo con tomate y papa y cocina cada componente hasta que quede bien cocido.', 'Integra los ingredientes principales y deja que se mezclen los sabores a fuego medio.', 'Ajusta la sazón y termina la preparación con la guarnición indicada.', 'Sirve caliente y aprovecha las porciones completas para evitar desperdicios.']},
+    'pescado_papa_tomate': {"tipo":'Comida',"nombre":'Pescado guisado con papa y tomate',"fuente":'Cocina mexicana tradicional',"ingredientes":[('pescado', 0.2, 'kg'), ('papa', 0.18, 'kg'), ('tomate', 0.16, 'kg'), ('cebolla', 0.04, 'kg'), ('zanahoria', 0.08, 'kg'), ('aceite', 10, 'ml')],"pasos":['Prepara los ingredientes de pescado guisado con papa y tomate y cocina cada componente hasta que quede bien cocido.', 'Integra los ingredientes principales y deja que se mezclen los sabores a fuego medio.', 'Ajusta la sazón y termina la preparación con la guarnición indicada.', 'Sirve caliente y aprovecha las porciones completas para evitar desperdicios.']},
+    'atun_papa': {"tipo":'Comida',"nombre":'Atún guisado con papa y tomate',"fuente":'Cocina mexicana tradicional',"ingredientes":[('atun', 1, 'pieza'), ('papa', 0.18, 'kg'), ('tomate', 0.14, 'kg'), ('cebolla', 0.04, 'kg'), ('zanahoria', 0.08, 'kg'), ('tortilla', 0.1, 'kg')],"pasos":['Prepara los ingredientes de atún guisado con papa y tomate y cocina cada componente hasta que quede bien cocido.', 'Integra los ingredientes principales y deja que se mezclen los sabores a fuego medio.', 'Ajusta la sazón y termina la preparación con la guarnición indicada.', 'Sirve caliente y aprovecha las porciones completas para evitar desperdicios.']},
+    'sardinas_papa': {"tipo":'Cena',"nombre":'Sardinas guisadas con papa y tomate',"fuente":'Cocina mexicana tradicional',"ingredientes":[('sardina', 0.5, 'kg'), ('papa', 0.16, 'kg'), ('tomate', 0.14, 'kg'), ('cebolla', 0.04, 'kg'), ('zanahoria', 0.08, 'kg'), ('tortilla', 0.1, 'kg')],"pasos":['Prepara los ingredientes de sardinas guisadas con papa y tomate y cocina cada componente hasta que quede bien cocido.', 'Integra los ingredientes principales y deja que se mezclen los sabores a fuego medio.', 'Ajusta la sazón y termina la preparación con la guarnición indicada.', 'Sirve caliente y aprovecha las porciones completas para evitar desperdicios.']},
+    'calabacitas_arroz': {"tipo":'Cena',"nombre":'Calabacitas guisadas con queso y arroz',"fuente":'Cocina mexicana tradicional',"ingredientes":[('calabaza', 0.25, 'kg'), ('tomate', 0.12, 'kg'), ('cebolla', 0.04, 'kg'), ('queso', 0.06, 'kg'), ('arroz', 0.09, 'kg'), ('aceite', 10, 'ml')],"pasos":['Prepara los ingredientes de calabacitas guisadas con queso y arroz y cocina cada componente hasta que quede bien cocido.', 'Integra los ingredientes principales y deja que se mezclen los sabores a fuego medio.', 'Ajusta la sazón y termina la preparación con la guarnición indicada.', 'Sirve caliente y aprovecha las porciones completas para evitar desperdicios.']},
+    'frijoles_arroz_huevo': {"tipo":'Cena',"nombre":'Plato de frijoles, arroz y huevo',"fuente":'Cocina mexicana tradicional',"ingredientes":[('frijol', 0.14, 'kg'), ('arroz', 0.1, 'kg'), ('huevo', 2, 'pieza'), ('tomate', 0.06, 'kg'), ('cebolla', 0.03, 'kg'), ('aceite', 10, 'ml')],"pasos":['Prepara los ingredientes de plato de frijoles, arroz y huevo y cocina cada componente hasta que quede bien cocido.', 'Integra los ingredientes principales y deja que se mezclen los sabores a fuego medio.', 'Ajusta la sazón y termina la preparación con la guarnición indicada.', 'Sirve caliente y aprovecha las porciones completas para evitar desperdicios.']},
+    'enchiladas_queso': {"tipo":'Cena',"nombre":'Enchiladas rojas de queso fresco',"fuente":'Cocina mexicana tradicional',"ingredientes":[('tortilla', 0.2, 'kg'), ('tomate', 0.18, 'kg'), ('cebolla', 0.03, 'kg'), ('queso', 0.07, 'kg'), ('frijol', 0.1, 'kg'), ('aceite', 10, 'ml')],"pasos":['Prepara los ingredientes de enchiladas rojas de queso fresco y cocina cada componente hasta que quede bien cocido.', 'Integra los ingredientes principales y deja que se mezclen los sabores a fuego medio.', 'Ajusta la sazón y termina la preparación con la guarnición indicada.', 'Sirve caliente y aprovecha las porciones completas para evitar desperdicios.']},
+    'tacos_atun': {"tipo":'Cena',"nombre":'Tacos de atún con papa y queso',"fuente":'Cocina mexicana tradicional',"ingredientes":[('tortilla', 0.18, 'kg'), ('atun', 1, 'pieza'), ('papa', 0.16, 'kg'), ('queso', 0.05, 'kg'), ('tomate', 0.06, 'kg'), ('cebolla', 0.03, 'kg'), ('aceite', 10, 'ml')],"pasos":['Prepara los ingredientes de tacos de atún con papa y queso y cocina cada componente hasta que quede bien cocido.', 'Integra los ingredientes principales y deja que se mezclen los sabores a fuego medio.', 'Ajusta la sazón y termina la preparación con la guarnición indicada.', 'Sirve caliente y aprovecha las porciones completas para evitar desperdicios.']},}
+
+
+# ---------------- COCINAS INTERNACIONALES ----------------
+# Estas recetas usan únicamente ingredientes que KashCook puede convertir en
+# productos del catálogo actual. Son platos reconocibles; no son nombres
+# inventados para rellenar el menú.
+RECETAS_REALES.update({
+    "arroz_frito_pollo": {"tipo":"Comida","nombre":"Arroz frito con pollo y verduras","fuente":"Cocina asiática tradicional","cocina":"Asiática","ingredientes":[("arroz",0.10,"kg"),("pollo",0.16,"kg"),("huevo",1,"pieza"),("zanahoria",0.08,"kg"),("cebolla",0.04,"kg"),("aceite",12,"ml")],"pasos":["Cocina el arroz previamente y déjalo enfriar para que quede suelto.","Corta el pollo en trozos pequeños y saltéalo en una sartén amplia con aceite hasta que esté completamente cocido.","Agrega cebolla, zanahoria y el huevo; mueve hasta que las verduras queden tiernas y el huevo cuajado.","Incorpora el arroz, mezcla a fuego alto durante unos minutos y ajusta la sazón antes de servir."]},
+    "arroz_frito_huevo": {"tipo":"Cena","nombre":"Arroz frito con huevo y verduras","fuente":"Cocina asiática tradicional","cocina":"Asiática","ingredientes":[("arroz",0.11,"kg"),("huevo",2,"pieza"),("zanahoria",0.08,"kg"),("cebolla",0.04,"kg"),("calabaza",0.10,"kg"),("aceite",12,"ml")],"pasos":["Ten listo el arroz cocido y frío para que los granos se separen al saltearlos.","Saltea cebolla, zanahoria y calabacita en una sartén amplia con aceite.","Haz un espacio al centro, agrega los huevos batidos y revuelve hasta que cuajen.","Integra el arroz, saltea todo junto a fuego alto y sirve inmediatamente."]},
+    "pollo_salteado_verduras": {"tipo":"Comida","nombre":"Pollo salteado con verduras estilo asiático","fuente":"Cocina asiática casera","cocina":"Asiática","ingredientes":[("pollo",0.20,"kg"),("zanahoria",0.10,"kg"),("calabaza",0.12,"kg"),("cebolla",0.05,"kg"),("arroz",0.08,"kg"),("aceite",12,"ml")],"pasos":["Corta el pollo y las verduras en tiras de tamaño parecido.","Calienta muy bien la sartén y dora el pollo con el aceite hasta que esté cocido.","Agrega cebolla, zanahoria y calabacita y saltea a fuego alto para conservar textura.","Sirve el salteado sobre arroz cocido y ajusta la sazón al gusto."]},
+    "frittata_papa_cebolla": {"tipo":"Desayuno","nombre":"Frittata italiana de papa y cebolla","fuente":"Cocina italiana tradicional","cocina":"Italiana","ingredientes":[("huevo",2,"pieza"),("papa",0.18,"kg"),("cebolla",0.05,"kg"),("queso",0.04,"kg"),("aceite",10,"ml")],"pasos":["Corta la papa en rebanadas delgadas y cocina a fuego medio con aceite hasta que esté tierna.","Agrega la cebolla fileteada y cocina hasta que quede suave.","Bate los huevos, mezcla con la papa y cebolla y vierte todo en la sartén.","Cocina a fuego bajo hasta que el huevo cuaje, agrega el queso y termina de dorar antes de servir."]},
+    "frittata_calabaza_queso": {"tipo":"Cena","nombre":"Frittata italiana de calabacita y queso","fuente":"Cocina italiana tradicional","cocina":"Italiana","ingredientes":[("huevo",2,"pieza"),("calabaza",0.18,"kg"),("cebolla",0.04,"kg"),("queso",0.06,"kg"),("tomate",0.06,"kg"),("aceite",10,"ml")],"pasos":["Saltea la cebolla y la calabacita en una sartén con poco aceite hasta que estén tiernas.","Bate los huevos y mézclalos con las verduras y parte del queso.","Vierte la mezcla en la sartén y cocina a fuego bajo hasta que la base esté firme.","Termina con tomate y el queso restante; tapa brevemente para que el centro cuaje y sirve."]},
+    "pollo_italiano_tomate": {"tipo":"Comida","nombre":"Pollo a la italiana con tomate y queso","fuente":"Cocina italiana casera","cocina":"Italiana","ingredientes":[("pollo",0.20,"kg"),("tomate",0.18,"kg"),("cebolla",0.04,"kg"),("queso",0.07,"kg"),("aceite",10,"ml"),("arroz",0.08,"kg")],"pasos":["Sella el pollo en una sartén con aceite hasta que tome color por ambos lados.","Agrega cebolla y tomate picados y cocina hasta obtener una salsa espesa.","Baja el fuego, coloca el queso sobre el pollo y tapa hasta que se funda.","Sirve con arroz como acompañamiento y aprovecha la salsa de tomate."]},
+    "pescado_mediterraneo": {"tipo":"Comida","nombre":"Pescado al estilo mediterráneo con tomate y cebolla","fuente":"Cocina mediterránea tradicional","cocina":"Mediterránea","ingredientes":[("pescado",0.20,"kg"),("tomate",0.18,"kg"),("cebolla",0.05,"kg"),("zanahoria",0.08,"kg"),("aceite",10,"ml"),("arroz",0.08,"kg")],"pasos":["Sazona el pescado y séllalo en una sartén con un poco de aceite.","Agrega cebolla y tomate y cocina hasta que formen una salsa ligera.","Incorpora la zanahoria y un poco de agua, tapa y cocina hasta que el pescado esté bien cocido.","Sirve con arroz y la salsa de tomate por encima."]},
+    "ensalada_atun_mediterranea": {"tipo":"Cena","nombre":"Ensalada mediterránea de atún","fuente":"Cocina mediterránea tradicional","cocina":"Mediterránea","ingredientes":[("atun",1,"pieza"),("lechuga",0.15,"pieza"),("tomate",0.12,"kg"),("cebolla",0.03,"kg"),("queso",0.04,"kg"),("aceite",8,"ml")],"pasos":["Lava y corta la lechuga, el tomate y la cebolla.","Escurre el atún y desmenúzalo en trozos grandes.","Combina las verduras con el atún y agrega el queso desmoronado.","Termina con aceite y sazona justo antes de servir."]},
+    "pescado_arroz_limón": {"tipo":"Cena","nombre":"Pescado a la plancha con arroz y verduras","fuente":"Cocina mediterránea casera","cocina":"Mediterránea","ingredientes":[("pescado",0.20,"kg"),("arroz",0.10,"kg"),("zanahoria",0.08,"kg"),("calabaza",0.10,"kg"),("cebolla",0.03,"kg"),("aceite",10,"ml")],"pasos":["Cocina el arroz hasta que quede suelto.","Sazona el pescado y cocínalo a la plancha con poco aceite hasta que esté bien cocido.","Saltea zanahoria, calabacita y cebolla hasta que estén tiernas pero firmes.","Sirve el pescado con el arroz y las verduras recién salteadas."]},
+    "tortilla_espanola": {"tipo":"Cena","nombre":"Tortilla española de papa y cebolla","fuente":"Cocina española tradicional","cocina":"Mediterránea","ingredientes":[("huevo",2,"pieza"),("papa",0.22,"kg"),("cebolla",0.06,"kg"),("aceite",15,"ml"),("tomate",0.08,"kg")],"pasos":["Corta la papa y la cebolla en rebanadas delgadas y cocínalas lentamente con aceite hasta que estén tiernas.","Bate los huevos y mézclalos con la papa y la cebolla ya escurridas.","Vierte la mezcla en una sartén y cocina a fuego medio-bajo hasta que la base cuaje.","Voltea con cuidado para terminar la cocción y acompaña con tomate fresco."]},
+    "arroz_tomate_italiano": {"tipo":"Comida","nombre":"Arroz italiano con tomate, queso y verduras","fuente":"Cocina italiana casera","cocina":"Italiana","ingredientes":[("arroz",0.10,"kg"),("tomate",0.16,"kg"),("cebolla",0.04,"kg"),("calabaza",0.12,"kg"),("queso",0.06,"kg"),("aceite",10,"ml")],"pasos":["Sofríe la cebolla y la calabacita con aceite hasta que comiencen a suavizarse.","Agrega el arroz y remueve un par de minutos para que se impregne del sofrito.","Añade tomate picado y agua suficiente para cocinar el arroz hasta que quede tierno.","Apaga el fuego, incorpora el queso y deja reposar unos minutos antes de servir."]},
+})
+
+# Metadatos de cocina/estilo. Los platos existentes son principalmente de
+# cocina mexicana/casera; los nuevos tienen su cocina explícita.
+for _rid, _r in RECETAS_REALES.items():
+    _r.setdefault("cocina", "Mexicana")
+    estilos_base = set(_r.get("estilos", []))
+    estilos_base.update([_r["cocina"], "Casera"])
+    bases = {x[0] for x in _r.get("ingredientes", [])}
+    if _r["cocina"] == "Mexicana":
+        estilos_base.add("Económica")
+    if bases & {"pollo","res","molida","cerdo","pescado","atun","sardina","huevo"}:
+        estilos_base.add("Alta en proteína")
+    if not bases & {"arroz","tortilla","papa","frijol"}:
+        estilos_base.add("Baja en carbohidratos")
+    if bases & {"lechuga","calabaza","zanahoria","tomate"}:
+        estilos_base.add("Saludable")
+    if _r["tipo"] == "Desayuno" and _r["cocina"] == "Mexicana":
+        estilos_base.add("Desayunos mexicanos")
+    _r["estilos"] = sorted(estilos_base)
+
 
 DESAYUNOS = [k for k,v in RECETAS_REALES.items() if v["tipo"]=="Desayuno"]
 PLATOS = [k for k,v in RECETAS_REALES.items() if v["tipo"] in ("Comida","Cena")]
@@ -2439,60 +2498,67 @@ def _costo_plan(plan,catalogo,personas):
         return 10**12
 
 
+def _receta_coincide_estilos(recipe_id, estilos):
+    """Devuelve si una receta pertenece a alguno de los estilos/cocinas elegidos."""
+    if not estilos:
+        return True
+    r=RECETAS_REALES[recipe_id]
+    return bool(set(estilos) & set(r.get("estilos", [])))
+
 def _generar_plan_local(dias, personas, presupuesto, comidas, catalogo, estilos=None):
-    """Optimización local: no permite que la IA invente platos ni cantidades."""
+    """Genera menús reales, variados, con rotación de cocinas y estilos."""
     import random
-    candidatos_des=[r for r in DESAYUNOS if _receta_a_comida(r,catalogo,"Desayuno")]
-    candidatos_pl=[r for r in PLATOS if _receta_a_comida(r,"".join([]) if False else catalogo,"Comida")]
+    from datetime import date
+    estilos=estilos or []
+    candidatos_des=[r for r in DESAYUNOS if _receta_coincide_estilos(r,estilos) and _receta_a_comida(r,catalogo,"Desayuno")]
+    candidatos_pl=[r for r in PLATOS if _receta_coincide_estilos(r,estilos) and _receta_a_comida(r,catalogo,"Comida")]
+    if not candidatos_des or not candidatos_pl:
+        # Si la combinación de filtros deja un hueco, permitimos recetas de cocina
+        # cercana pero no ignoramos las preferencias por completo.
+        candidatos_des=[r for r in DESAYUNOS if _receta_a_comida(r,catalogo,"Desayuno")]
+        candidatos_pl=[r for r in PLATOS if _receta_a_comida(r,catalogo,"Comida")]
     if not candidatos_des or not candidatos_pl:
         raise ValueError("No hay suficientes recetas compatibles con los productos de las tiendas seleccionadas.")
-    # Generar candidatos compactos y evaluar el costo real de paquetes.
-    rng=random.Random(20261007 + int(dias)*31 + int(personas)*17 + int(presupuesto))
-    mejor=None
-    mejor_score=-10**18
-    for _ in range(2500):
-        historial=[]; slots=[]
+    iso=date.today().isocalendar()
+    semana_seed=(int(iso.year)*100+int(iso.week))*1000003
+    sesion=int(st.session_state.get("kc_semilla_menu",0))
+    if not sesion:
+        sesion=random.SystemRandom().randint(1,10**9); st.session_state["kc_semilla_menu"]=sesion
+    rng=random.Random(semana_seed+sesion+int(dias)*31+int(personas)*17+int(presupuesto))
+    mejor=None; mejor_score=-10**18
+    for _ in range(4500):
+        usados=set(); slots=[]
         for d in range(dias):
             fila=[]
-            recientes={x for row in historial[-2:] for x in row}
             for tipo in comidas:
                 pool=candidatos_des if tipo=="Desayuno" else candidatos_pl
-                disponibles=[x for x in pool if x not in recientes]
-                if len(disponibles)<2: disponibles=pool
-                rid=rng.choice(disponibles)
-                fila.append(rid)
-            slots.append(fila); historial.append(fila)
+                disponibles=[x for x in pool if x not in usados]
+                if not disponibles:
+                    recientes={x for row in slots[-3:] for x in row}
+                    disponibles=[x for x in pool if x not in recientes] or pool
+                rid=rng.choice(disponibles); fila.append(rid); usados.add(rid)
+            slots.append(fila)
         plan=_plan_con_recetas(slots,catalogo,comidas)
         if not plan: continue
         nombres=[RECETAS_REALES[r]["nombre"].lower() for row in slots for r in row]
-        tortilla_count=sum(1 for n in nombres if any(x in n for x in ("tortilla","quesadilla","enfrijolada","taco","enchilada")))
-        if tortilla_count > max(5, int(dias*3*0.30)):
-            continue
+        tortilla_count=sum(any(x in n for x in ("tortilla","quesadilla","enfrijolada","taco","enchilada","flauta","chilaquiles")) for n in nombres)
+        if tortilla_count>max(5,int(dias*len(comidas)*.30)): continue
         total=_costo_plan(plan,catalogo,personas)
-        limite=presupuesto+TOLERANCIA_PRESUPUESTO
-        if total>limite: continue
-        # Acercarse al presupuesto sin excederlo, penalizando repetición.
-        if total <= presupuesto:
-            score=-(presupuesto-total)
-        else:
-            # Nunca preferir un plan que se pase si existe uno dentro del presupuesto.
-            score=-10000-(total-presupuesto)
-        score += len(set(x for row in slots for x in row))*4
-        if total>=presupuesto*MIN_UTILIZACION_PRESUPUESTO and total<=presupuesto: score+=40
-        if score>mejor_score:
-            mejor_score=score; mejor=(plan,total)
-    if mejor:
-        return mejor
-    # No se permite devolver un plan que exceda el presupuesto.
-    # Si el presupuesto es matemáticamente insuficiente para la combinación
-    # de días/personas y las presentaciones disponibles, se informa en lugar
-    # de falsear el resultado.
-    raise ValueError(
-        f"El presupuesto de ${presupuesto:,.2f} no alcanza para {dias} días y {personas} persona(s) con las presentaciones disponibles. "
-        "KashCook no va a inventar precios ni reducir las porciones a niveles irreales. "
-        "Aumenta el presupuesto, reduce días/personas o cambia la selección de tiendas."
-    )
-    return mejor
+        if total>presupuesto+TOLERANCIA_PRESUPUESTO: continue
+        variedad=len(set(x for row in slots for x in row)); repet=len(slots)*len(comidas)-variedad
+        cocinas=[RECETAS_REALES[x].get("cocina","Mexicana") for row in slots for x in row]
+        cocinas_distintas=len(set(cocinas))
+        estilos_cumplidos=len(set(cocinas) & set(estilos)) if estilos else cocinas_distintas
+        # La variedad de cocina pesa casi tanto como no repetir platos.
+        # Si el usuario eligió varias cocinas, intentamos utilizar varias.
+        score=variedad*35-repet*220+cocinas_distintas*45+estilos_cumplidos*35+rng.random()*30
+        if len(set(estilos) & set(cocinas)) > 1:
+            score += 80 * len(set(estilos) & set(cocinas))
+        if total<=presupuesto: score+=250-(presupuesto-total)*.2
+        else: score-=10000+(total-presupuesto)*10
+        if score>mejor_score: mejor_score=score; mejor=(plan,total)
+    if mejor: return mejor
+    raise ValueError(f"El presupuesto de ${presupuesto:,.2f} no alcanza para {dias} días y {personas} persona(s) con las presentaciones disponibles. KashCook no va a inventar precios ni reducir las porciones a niveles irreales. Aumenta el presupuesto, reduce días/personas o cambia la selección de tiendas.")
 
 
 def generar_plan_seguro(dias,personas,presupuesto,comidas,catalogo,estilos=None):
@@ -2503,198 +2569,141 @@ def generar_plan_seguro(dias,personas,presupuesto,comidas,catalogo,estilos=None)
     return plan,total
 
 # ============================================================
-# INTERFAZ
+# INTERFAZ — KASHCOOK AI
 # ============================================================
 
-st.title(
-    "🍳 KashCook AI"
-)
+st.markdown("""
+<style>
+.kc-hero{padding:1.2rem 1.4rem;border-radius:18px;background:linear-gradient(135deg,#111827,#243447);color:white;margin-bottom:1rem;}
+.kc-hero h1{margin:0;font-size:2rem;}
+.kc-hero p{margin:.35rem 0 0;color:#d1d5db;}
+.kc-card{padding:1rem 1.1rem;border:1px solid rgba(128,128,128,.25);border-radius:16px;margin:.5rem 0 1rem;}
+.kc-label{font-weight:700;font-size:1.05rem;margin-bottom:.45rem;}
+div.stButton > button[kind="primary"]{min-height:3.2rem;font-size:1.05rem;font-weight:800;border-radius:12px;}
+</style>
+<div class="kc-hero">
+  <h1>🍳 KashCook AI</h1>
+  <p>Tu menú, tus compras y tu presupuesto en un solo lugar</p>
+</div>
+""", unsafe_allow_html=True)
 
-st.markdown(
-    """
-### Tu menú, tus compras y tu presupuesto en un solo lugar
-
-KashCook crea el menú, calcula las cantidades para el número
-de personas y transforma esas cantidades en productos reales
-según la presentación disponible.
-"""
-)
-
-st.divider()
-
+st.markdown("KashCook crea el menú, calcula las cantidades para el número de personas y transforma esas cantidades en productos reales según la presentación disponible.")
 
 # ============================================================
-# TIENDAS
+# CONFIGURACIÓN PRINCIPAL
 # ============================================================
 
-st.subheader(
-    "🛒 ¿Dónde vas a comprar?"
-)
-
-tiendas_seleccionadas = []
-
-columnas = st.columns(4)
-
-for i, tienda in enumerate(
-    TIENDAS_DISPONIBLES
-):
-
+st.markdown('<div class="kc-card"><div class="kc-label">🛒 ¿Dónde vas a comprar?</div></div>', unsafe_allow_html=True)
+tiendas_seleccionadas=[]
+columnas=st.columns(4)
+for i,tienda in enumerate(TIENDAS_DISPONIBLES):
     with columnas[i]:
-
-        seleccionada = st.checkbox(
-            tienda,
-            value=(i == 0),
-            key=f"tienda_{i}",
-        )
-
-        if seleccionada:
-            tiendas_seleccionadas.append(
-                tienda
-            )
-
+        if st.checkbox(tienda, value=(i==0), key=f"tienda_{i}"):
+            tiendas_seleccionadas.append(tienda)
 if not tiendas_seleccionadas:
+    st.warning("Selecciona al menos una tienda.")
 
-    st.warning(
-        "Selecciona al menos una tienda."
-    )
-
-    st.stop()
-
-
-# ============================================================
-# DATOS
-# ============================================================
-
-col1, col2, col3 = st.columns(3)
-
+col1,col2,col3=st.columns(3)
 with col1:
-
-    dias = st.number_input(
-        "📅 Días",
-        min_value=1,
-        max_value=7,
-        value=7,
-        step=1,
-    )
-
+    dias=st.number_input("📅 Días",1,7,7,1)
 with col2:
-
-    personas = st.number_input(
-        "👨‍👩‍👧‍👦 Personas",
-        min_value=1,
-        max_value=10,
-        value=4,
-        step=1,
-    )
-
+    personas=st.number_input("👨‍👩‍👧‍👦 Personas",1,10,4,1)
 with col3:
+    presupuesto=st.number_input("💰 Presupuesto total (MXN)",200,10000,1500,100)
 
-    presupuesto = st.number_input(
-        "💰 Presupuesto total",
-        min_value=200,
-        max_value=10000,
-        value=1500,
-        step=100,
-    )
+col1,col2=st.columns(2)
+with col1:
+    st.markdown('<div class="kc-label">🍽️ Estilo de comida</div>', unsafe_allow_html=True)
+    estilos=st.multiselect("Selecciona uno o varios estilos",["Mexicana","Casera","Asiática","Italiana","Mediterránea","Saludable","Económica","Alta en proteína","Baja en carbohidratos","Desayunos mexicanos","Comida rápida casera"],default=["Mexicana","Casera","Económica"],label_visibility="collapsed")
+    st.caption("KashCook combina las cocinas seleccionadas y busca variedad de platos, proteínas y preparaciones; no se limita a cambiar ingredientes de una misma receta.")
+with col2:
+    st.markdown('<div class="kc-label">🍳 ¿Qué comidas quieres planear?</div>', unsafe_allow_html=True)
+    comidas=st.multiselect("Selecciona las comidas",["Desayuno","Comida","Cena"],default=["Desayuno","Comida","Cena"],label_visibility="collapsed")
 
+col1,col2=st.columns(2)
+with col1:
+    st.markdown('<div class="kc-label">🔌 Electrodomésticos disponibles</div>', unsafe_allow_html=True)
+    electrodomesticos=st.multiselect("Selecciona los que tienes",["Estufa","Horno","Microondas","Air Fryer","Licuadora","Freidora","Olla de presión","Olla lenta","Parrilla eléctrica"],default=["Estufa","Licuadora"],label_visibility="collapsed")
+with col2:
+    st.markdown('<div class="kc-label">⚠️ Restricciones y alergias</div>', unsafe_allow_html=True)
+    restricciones=st.text_area("Indica alergias, alimentos que no consumen o restricciones",placeholder="Ejemplo: sin camarón, sin cacahuate, no picante, vegetariano...",label_visibility="collapsed")
 
-# ============================================================
-# ESTILOS
-# ============================================================
-
-st.subheader(
-    "🍽️ Estilo de comida"
-)
-
-estilos = st.multiselect(
-    "Selecciona uno o varios estilos",
-    [
-        "Mexicana",
-        "Casera",
-        "Saludable",
-        "Económica",
-        "Alta en proteína",
-        "Baja en carbohidratos",
-        "Italiana",
-        "Mediterránea",
-        "Desayunos mexicanos",
-        "Comida rápida casera",
-    ],
-    default=[
-        "Mexicana",
-        "Casera",
-        "Económica",
-    ],
-)
-
-
-# ============================================================
-# COMIDAS
-# ============================================================
-
-st.subheader(
-    "🍳 ¿Qué comidas quieres planear?"
-)
-
-comidas = st.multiselect(
-    "Selecciona las comidas",
-    [
-        "Desayuno",
-        "Comida",
-        "Cena",
-    ],
-    default=[
-        "Desayuno",
-        "Comida",
-        "Cena",
-    ],
-)
-
+st.markdown("### 🚀 Listo para crear tu menú")
+colg1,colg2=st.columns([3,1])
+with colg1:
+    generar_menu=st.button("🚀 GENERAR MI MENÚ", type="primary", use_container_width=True)
+with colg2:
+    otra_opcion=st.button("🔄 OTRA OPCIÓN", use_container_width=True)
+if otra_opcion:
+    st.session_state["kc_semilla_menu"]=__import__("random").SystemRandom().randint(1,10**9)
+    st.rerun()
+if generar_menu:
+    if not comidas:
+        st.error("Selecciona al menos una comida.")
+        st.stop()
+    if not tiendas_seleccionadas:
+        st.error("Selecciona al menos una tienda.")
+        st.stop()
+    catalogo=[]
+    for tienda in tiendas_seleccionadas:
+        catalogo.extend(CATALOGOS.get(tienda,[]))
+    if not catalogo:
+        st.error("No hay productos disponibles para las tiendas seleccionadas.")
+        st.stop()
+    with st.spinner("KashCook está construyendo un menú real y ajustándolo al presupuesto..."):
+        try:
+            plan,total=generar_plan_seguro(dias=int(dias),personas=int(personas),presupuesto=float(presupuesto),comidas=comidas,catalogo=catalogo,estilos=estilos)
+            st.session_state["plan"]=plan
+            st.session_state["compra"]=calcular_compra(plan,catalogo,personas)[0]
+            st.session_state["total"]=total
+            st.session_state["presupuesto"]=presupuesto
+            st.session_state["personas"]=personas
+            st.session_state["tiendas"]=tiendas_seleccionadas
+            st.success("Plan generado correctamente con recetas reales.")
+        except Exception as e:
+            st.error(f"Ocurrió un error al generar el plan: {e}")
+            st.stop()
 
 # ============================================================
-# ELECTRODOMÉSTICOS
+# RESULTADO
 # ============================================================
 
-st.subheader(
-    "🔌 Electrodomésticos disponibles"
-)
+if "plan" in st.session_state:
+    plan=st.session_state["plan"]
+    compra=st.session_state["compra"]
+    total=st.session_state["total"]
+    presupuesto=st.session_state["presupuesto"]
+    personas=st.session_state["personas"]
+    tiendas=st.session_state["tiendas"]
+    st.divider()
+    st.header("📋 Tu plan")
+    st.info("Los platillos se seleccionan de una biblioteca de recetas reales; KashCook no inventa nombres de platillos. El cálculo usa las presentaciones y precios del catálogo local y no los presenta como precio de caja en tiempo real.")
+    c1,c2,c3=st.columns(3)
+    with c1: st.metric("Presupuesto",f"${presupuesto:,.2f}")
+    with c2: st.metric("Compra calculada",f"${total:,.2f}")
+    with c3: st.metric("Disponible",f"${max(0,presupuesto-total):,.2f}")
+    if total<=presupuesto:
+        st.success(f"La compra está dentro del presupuesto. Quedan ${presupuesto-total:,.2f}.")
 
-electrodomesticos = st.multiselect(
-    "Selecciona los que tienes",
-    [
-        "Estufa",
-        "Horno",
-        "Microondas",
-        "Air Fryer",
-        "Licuadora",
-        "Freidora",
-        "Olla de presión",
-        "Olla lenta",
-        "Parrilla eléctrica",
-    ],
-    default=[
-        "Estufa",
-        "Licuadora",
-    ],
-)
+    st.header("🍽️ Menú")
+    catalogo_global=[]
+    for lista in CATALOGOS.values(): catalogo_global.extend(lista)
+    productos_por_id={p["id"]:p for p in catalogo_global}
+    for dia in plan.get("dias",[]):
+        with st.expander(f"Día {dia.get('dia','')}", expanded=(dia.get('dia')==1)):
+            for comida in dia.get("comidas",[]):
+                st.markdown(f"### {comida.get('tipo','Comida')}: {comida.get('nombre','')}")
+                if comida.get("fuente"): st.caption(f"Referencia culinaria: {comida.get('fuente')}")
+                st.markdown("**Ingredientes:**")
+                for ing in comida.get("ingredientes",[]):
+                    p=productos_por_id.get(ing.get("producto_id")); nombre=p["nombre"] if p else str(ing.get("producto_id"))
+                    st.write(f"- {nombre}: {ing.get('cantidad_por_persona','')} {ing.get('unidad','')} por persona")
+                st.markdown("**Preparación:**")
+                for n,paso in enumerate(comida.get("preparacion",[]) or ["Preparar los ingredientes y cocinar completamente."],1): st.write(f"{n}. {paso}")
 
-
-# ============================================================
-# RESTRICCIONES
-# ============================================================
-
-st.subheader(
-    "⚠️ Restricciones y alergias"
-)
-
-restricciones = st.text_area(
-    "Indica alergias, alimentos que no consumen "
-    "o restricciones",
-    placeholder=(
-        "Ejemplo: sin camarón, sin cacahuate, "
-        "no picante, vegetariano..."
-    ),
-)
-
-
-st.divider()
+    st.header("🛒 Lista de compra")
+    datos_tabla=[{"Producto":i["producto"],"Presentación":i["presentacion"],"Cantidad":i["paquetes"],"Precio unitario":f"${i['precio_unitario']:,.2f}","Total":f"${i['subtotal']:,.2f}","Tienda":i["tienda"]} for i in compra]
+    if datos_tabla: st.dataframe(datos_tabla,use_container_width=True,hide_index=True)
+    st.subheader(f"💰 Total: ${total:,.2f} MXN")
+    pdf_bytes=generar_pdf(plan=plan,compra=compra,total=total,presupuesto=presupuesto,personas=personas,tiendas=tiendas)
+    st.download_button("📄 Descargar plan completo en PDF",data=pdf_bytes,file_name="KashCook_AI_Plan.pdf",mime="application/pdf",use_container_width=True)
