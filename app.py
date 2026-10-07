@@ -1093,7 +1093,7 @@ def llamar_groq(cliente, prompt, temperatura=0.4):
             {"role": "user", "content": prompt},
         ],
         temperature=temperatura,
-        max_tokens=4500,
+        max_tokens=3200,
     )
 
     contenido = respuesta.choices[0].message.content
@@ -2349,83 +2349,108 @@ def _resolver_producto_por_nombre(valor, catalogo):
     return None
 
 
-def _prompt_bloque(tienda_texto, dias_bloque, personas, estilos, comidas,
-                   electrodomesticos, restricciones, catalogo):
-    """Prompt compacto por bloque.
-
-    No se manda el catálogo completo a Groq. La IA diseña la receta y
-    KashCook resuelve después los ingredientes contra el catálogo.
-    """
+def _prompt_comida(tienda_texto, dia, tipo_comida, personas, estilos,
+                   electrodomesticos, restricciones):
+    """Genera UNA sola comida completa por llamada para evitar truncamientos."""
     estilos_texto = ", ".join(estilos) if estilos else "Libre"
     equipo = ", ".join(electrodomesticos) if electrodomesticos else "Cocina convencional"
     restricciones = (restricciones or "Ninguna").strip()[:500]
-    comidas_texto = ", ".join(comidas)
-    dias_texto = ", ".join(str(x) for x in dias_bloque)
 
-    return f"""KashCook AI. Genera únicamente los días {dias_texto} para {personas} personas.
+    return f"""KashCook AI. Actúa como chef profesional y genera UNA SOLA receta completa.
 
-COMIDAS OBLIGATORIAS POR DÍA: {comidas_texto}
+DÍA: {dia}
+TIPO DE COMIDA: {tipo_comida}
+PERSONAS: {personas}
 ESTILOS: {estilos_texto}
-EQUIPO: {equipo}
-RESTRICCIONES: {restricciones}
+EQUIPO DISPONIBLE: {equipo}
+RESTRICCIONES/ALERGIAS: {restricciones}
 TIENDAS DE REFERENCIA: {tienda_texto}
 
-CALIDAD CULINARIA:
-Crea platillos completos, abundantes y realmente cocinables. NO simplifiques las recetas para ahorrar espacio. NO existe límite de ingredientes ni de pasos. Usa todos los ingredientes que necesite cada platillo: proteína, verduras, aromáticos, especias, salsas, adobos, guarniciones, lácteos, chiles, hierbas y complementos cuando correspondan. Una receta puede tener muchos ingredientes y pasos si el platillo lo requiere.
+CALIDAD CULINARIA OBLIGATORIA:
+- Elabora un platillo sustancioso, abundante, apetitoso y realmente cocinable.
+- NO limites artificialmente la cantidad de ingredientes. Usa todos los ingredientes necesarios para que la receta quede bien hecha.
+- Puede incluir proteína, verduras, base, guarnición, salsa, adobo, chiles, especias, hierbas, aromáticos, lácteos, aceites y complementos cuando correspondan.
+- NO limites artificialmente los pasos. Explica la preparación completa y en orden lógico.
+- No hagas recetas pobres de 2 o 3 ingredientes salvo que sea propio del platillo.
+- Busca cocina mexicana/casera/regional auténtica según los estilos elegidos.
+- Varía las proteínas y evita repetir preparaciones obvias.
+- Respeta estrictamente restricciones y equipo disponible.
+- Las cantidades son POR PERSONA.
+- Usa unidades claras: g, kg, ml, pieza, lata, taza, cucharada, cucharadita, diente, etc.
+- Nunca uses la palabra "Almuerzo".
 
-Busca variedad real entre días y comidas. Evita repetir el mismo platillo o preparación. Varía pollo, res, cerdo, pescado, atún, sardina, huevo y opciones económicas cuando sean compatibles con el estilo y presupuesto. Respeta las restricciones.
+Devuelve EXACTAMENTE este objeto JSON y NADA MÁS:
+{{"dia":{dia},"comida":{{"tipo":"{tipo_comida}","nombre":"Nombre completo del platillo","ingredientes":[{{"ingrediente":"pollo","cantidad_por_persona":180,"unidad":"g"}}],"preparacion":["Paso detallado 1","Paso detallado 2"]}}}}
 
-Las cantidades son POR PERSONA. Usa unidades claras como g, kg, ml, pieza, lata, cucharada, cucharadita, diente, taza, etc. No uses la palabra "Almuerzo".
+IMPORTANTE: cierra correctamente TODAS las llaves y corchetes. No agregues texto fuera del JSON."""
 
-El campo "ingrediente" debe ser el nombre normal del ingrediente, por ejemplo "pollo", "jitomate", "cebolla", "ajo", "arroz", "frijol", "chile ancho". KashCook resolverá después cada ingrediente contra su catálogo. NO inventes IDs.
 
-PREPARACIÓN: explica la receta completa, en orden lógico y con suficientes pasos para que una persona pueda cocinarla. No reduzcas pasos artificialmente.
+def _extraer_comida(respuesta, dia, tipo_comida):
+    obj = extraer_json(respuesta)
+    if not isinstance(obj, dict):
+        raise ValueError("La IA no devolvió un objeto JSON.")
 
-RESPONDE ÚNICAMENTE JSON VÁLIDO, SIN MARKDOWN NI TEXTO ANTES O DESPUÉS.
-Estructura exacta:
-{{"dias":[{{"dia":{dias_bloque[0]},"comidas":[{{"tipo":"Desayuno","nombre":"...","ingredientes":[{{"ingrediente":"...","cantidad_por_persona":0,"unidad":"..."}}],"preparacion":["...","..."]}}]}}]}}
-"""
+    # Aceptar también una respuesta con dias/comidas si el modelo se desvía.
+    if obj.get("comida"):
+        comida = obj["comida"]
+    elif obj.get("dias"):
+        dias = obj.get("dias") or []
+        encontrados = [d for d in dias if int(d.get("dia", -1)) == int(dia)]
+        if not encontrados or not encontrados[0].get("comidas"):
+            raise ValueError(f"La IA no devolvió la comida {tipo_comida} del día {dia}.")
+        comidas = encontrados[0]["comidas"]
+        comida = next((c for c in comidas if c.get("tipo") == tipo_comida), comidas[0])
+    else:
+        raise ValueError("La IA no devolvió la estructura esperada.")
+
+    if not isinstance(comida, dict):
+        raise ValueError("La receta recibida no es válida.")
+    if str(comida.get("tipo", "")).strip() != tipo_comida:
+        comida["tipo"] = tipo_comida
+    if not comida.get("nombre"):
+        raise ValueError("La receta no tiene nombre.")
+    if not isinstance(comida.get("ingredientes"), list) or not comida["ingredientes"]:
+        raise ValueError("La receta no tiene ingredientes.")
+    if not isinstance(comida.get("preparacion"), list) or not comida["preparacion"]:
+        raise ValueError("La receta no tiene preparación.")
+    return comida
 
 
 def generar_plan_por_bloques(cliente, dias, personas, estilos, comidas,
                               electrodomesticos, restricciones, catalogo,
                               tiendas):
-    """Genera un día por llamada para conservar recetas completas sin truncar JSON."""
+    """Genera una comida por llamada: recetas completas sin truncar el JSON."""
     resultado = {"dias": []}
     tienda_texto = ", ".join(tiendas)
 
-    # Un día por llamada: bajar el tamaño de cada respuesta, NO la calidad culinaria.
     for dia in range(1, int(dias) + 1):
-        prompt = _prompt_bloque(
-            tienda_texto, [dia], personas, estilos, comidas,
-            electrodomesticos, restricciones, catalogo
-        )
-
-        try:
-            respuesta = llamar_groq(cliente, prompt, temperatura=0.55)
-            parcial = normalizar_plan(extraer_json(respuesta))
-        except Exception as primer_error:
-            prompt_reintento = prompt + f"""
-
-REINTENTO DEL DÍA {dia}: la respuesta anterior no pudo interpretarse. Genera nuevamente TODO el día {dia}. No omitas comidas, ingredientes ni pasos. Devuelve solamente JSON válido y termina correctamente todos los corchetes y llaves."""
-            try:
-                respuesta = llamar_groq(cliente, prompt_reintento, temperatura=0.25)
-                parcial = normalizar_plan(extraer_json(respuesta))
-            except Exception as segundo_error:
+        dia_obj = {"dia": dia, "comidas": []}
+        for tipo_comida in comidas:
+            prompt = _prompt_comida(
+                tienda_texto, dia, tipo_comida, personas, estilos,
+                electrodomesticos, restricciones
+            )
+            ultimo_error = None
+            comida = None
+            for intento in range(1, 4):
+                try:
+                    temperatura = 0.50 if intento == 1 else 0.20
+                    respuesta = llamar_groq(cliente, prompt, temperatura=temperatura)
+                    comida = _extraer_comida(respuesta, dia, tipo_comida)
+                    break
+                except Exception as exc:
+                    ultimo_error = exc
+                    if intento < 3:
+                        prompt = prompt + f"\nREINTENTO {intento + 1}: la respuesta anterior fue inválida. Genera nuevamente la receta completa y termina el JSON correctamente."
+            if comida is None:
                 raise ValueError(
-                    f"No se pudo generar correctamente el día {dia}. "
-                    f"La respuesta de la IA quedó incompleta o no fue JSON válido. "
-                    f"Se realizaron 2 intentos para este día."
-                ) from segundo_error
-
-        dias_parciales = parcial.get("dias") or []
-        encontrados = [d for d in dias_parciales if int(d.get("dia", -1)) == dia]
-        if not encontrados:
-            raise ValueError(f"La IA no devolvió exactamente el día {dia}.")
-        resultado["dias"].append(encontrados[0])
+                    f"No se pudo generar {tipo_comida} del día {dia}. "
+                    f"Se realizaron 3 intentos sin obtener un JSON completo."
+                ) from ultimo_error
+            dia_obj["comidas"].append(comida)
+        resultado["dias"].append(dia_obj)
 
     return normalizar_plan(resultado)
-
 
 def toggle_seleccion(clave, valor):
     actual = st.session_state.get(clave, [])
@@ -2565,6 +2590,13 @@ label, [data-testid="stWidgetLabel"] p, [data-testid="stWidgetLabel"] { color:#1
   .kc-pill { font-size:.88rem; }
   .kc-recipe p, .kc-recipe li { font-size:1rem !important; }
 }
+
+.kc-store-logo{height:54px;display:flex;align-items:center;justify-content:center;margin:2px 0 6px;}
+.kc-store-logo img{width:52px;height:52px;object-fit:contain;background:#fff;border-radius:14px;padding:7px;box-shadow:0 5px 16px rgba(0,0,0,.10);}
+[data-testid="stButton"] button{min-height:52px!important;border-radius:16px!important;font-size:16px!important;font-weight:800!important;line-height:1.15!important;}
+[data-testid="stButton"] button[kind="secondary"]{background:#ffffff!important;color:#17201b!important;border:2px solid #d7dfd9!important;}
+[data-testid="stButton"] button[kind="primary"]{background:#b7e23b!important;color:#17201b!important;border:2px solid #8dbb16!important;}
+.kc-card,.kc-note,.kc-section{color:#17201b!important;}
 </style>
 """, unsafe_allow_html=True)
 
@@ -2579,10 +2611,18 @@ st.markdown("""
 
 # Estado persistente para botones de selección.
 st.session_state.setdefault("kc_tiendas", ["Alsuper"])
+st.session_state["kc_tiendas"] = [x for x in st.session_state.get("kc_tiendas", []) if x in ["Alsuper", "Walmart", "Soriana", "Bodega Aurrerá"]]
 st.session_state.setdefault("kc_estilos", ["Mexicana", "Casera", "Económica"])
 st.session_state.setdefault("kc_comidas", ["Desayuno", "Comida", "Cena"])
 st.session_state.setdefault("kc_electro", ["Estufa", "Licuadora"])
 
+
+TIENDA_LOGOS = {
+    "Alsuper": "https://www.google.com/s2/favicons?domain=alsuper.com&sz=128",
+    "Walmart": "https://www.google.com/s2/favicons?domain=walmart.com.mx&sz=128",
+    "Soriana": "https://www.google.com/s2/favicons?domain=soriana.com&sz=128",
+    "Bodega Aurrerá": "https://www.google.com/s2/favicons?domain=bodegaaurrera.com.mx&sz=128",
+}
 
 def selector_botones(titulo, opciones, clave, iconos=None, columnas=2):
     st.markdown(f'<div class="kc-section">{titulo}</div>', unsafe_allow_html=True)
@@ -2590,6 +2630,11 @@ def selector_botones(titulo, opciones, clave, iconos=None, columnas=2):
     seleccion = st.session_state.get(clave, [])
     for i, opcion in enumerate(opciones):
         with cols[i % columnas]:
+            if clave == "kc_tiendas" and opcion in TIENDA_LOGOS:
+                st.markdown(
+                    f'<div class="kc-store-logo"><img src="{TIENDA_LOGOS[opcion]}" alt="{opcion}"></div>',
+                    unsafe_allow_html=True,
+                )
             pref = (iconos or {}).get(opcion, "")
             texto = f"{pref} {opcion}".strip()
             st.button(
@@ -2604,15 +2649,13 @@ def selector_botones(titulo, opciones, clave, iconos=None, columnas=2):
 
 selector_botones(
     "🛒 ¿Dónde vas a comprar?",
-    ["Alsuper", "Walmart", "Soriana", "Bodega Aurrerá", "Smart"],
+    ["Alsuper", "Walmart", "Soriana", "Bodega Aurrerá"],
     "kc_tiendas",
-    {"Alsuper":"🟢", "Walmart":"🔵", "Soriana":"🔴", "Bodega Aurrerá":"🟠", "Smart":"🟣"},
+    {"Alsuper":"🟢", "Walmart":"🔵", "Soriana":"🔴", "Bodega Aurrerá":"🟠"},
     columnas=2,
 )
 
 tienda_info = st.session_state["kc_tiendas"]
-if "Smart" in tienda_info:
-    st.markdown('<div class="kc-note">Smart está disponible como tienda de selección, pero KashCook no inventará precios si no existe una fuente pública verificable.</div>', unsafe_allow_html=True)
 if not tienda_info:
     st.error("Selecciona al menos una tienda.")
 
@@ -2682,7 +2725,7 @@ if st.button("🚀 GENERAR MI PLAN", type="primary", use_container_width=True, k
     for tienda in tiendas_seleccionadas:
         catalogo.extend(CATALOGOS.get(tienda, []))
     if not catalogo:
-        st.error("No hay productos disponibles para las tiendas seleccionadas. Si elegiste Smart, agrega también Alsuper, Walmart o Soriana.")
+        st.error("No hay productos disponibles para las tiendas seleccionadas.")
         st.stop()
 
     with st.spinner("👨‍🍳 KashCook está preparando recetas completas..."):
@@ -2819,3 +2862,4 @@ if "plan" in st.session_state:
         mime="application/pdf",
         use_container_width=True,
     )
+
