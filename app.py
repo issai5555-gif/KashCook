@@ -2418,44 +2418,137 @@ def toggle_seleccion(clave, valor):
 
 st.markdown("""
 <style>
-:root { --kc-lime:#B7E532; --kc-dark:#171A17; --kc-cream:#FFF9ED; --kc-coral:#FF7043; --kc-muted:#69706A; }
-.block-container { max-width: 1180px; padding: 1rem 1rem 4rem 1rem; }
-html, body, [class*="stApp"] { font-size: 17px !important; }
-.stApp { background: linear-gradient(180deg,#fffdf8 0%,#f5f8f0 100%); color:#171A17; }
-.kc-hero { border-radius:28px; padding:30px 26px; margin-bottom:22px; background:linear-gradient(135deg,#171A17 0%,#263026 55%,#64751e 100%); color:white; box-shadow:0 12px 35px rgba(23,26,23,.16); }
-.kc-hero h1 { font-size:clamp(2rem,6vw,3.5rem); line-height:1; margin:0 0 10px 0; letter-spacing:-1.5px; }
-.kc-hero p { font-size:1.05rem; margin:0; color:#f3f7eb; }
-.kc-section { font-size:1.35rem; font-weight:800; margin:25px 0 12px 0; }
-.kc-card { background:white; border:1px solid #e4e8df; border-radius:20px; padding:18px; box-shadow:0 7px 22px rgba(23,26,23,.07); margin-bottom:14px; }
-.kc-store { min-height:100px; display:flex; flex-direction:column; justify-content:center; align-items:center; text-align:center; border-radius:20px; }
-.kc-logo { font-size:2rem; font-weight:900; letter-spacing:-1px; }
-.kc-muted { color:#69706A; font-size:.92rem; }
-.kc-price { font-size:1.55rem; font-weight:900; }
-.kc-recipe { border-left:7px solid var(--kc-lime); background:white; border-radius:18px; padding:20px; margin:12px 0; box-shadow:0 7px 20px rgba(23,26,23,.07); }
-.kc-day { background:#171A17; color:white; border-radius:16px; padding:12px 16px; margin-top:22px; font-size:1.2rem; font-weight:800; }
-.kc-pill { display:inline-block; background:#eef6d3; color:#34410c; border-radius:999px; padding:6px 11px; margin:3px; font-weight:700; font-size:.9rem; }
-.kc-note { background:#fff5e6; border:1px solid #ffd9a8; border-radius:16px; padding:14px 16px; }
-div.stButton > button { min-height:50px !important; border-radius:16px !important; font-size:16px !important; font-weight:800 !important; border:1px solid #dce2d5 !important; box-shadow:0 3px 10px rgba(0,0,0,.05) !important; white-space:normal !important; }
-div.stButton > button[kind="primary"] { background:#B7E532 !important; color:#171A17 !important; border-color:#9ecb18 !important; }
-div.stButton > button:hover { transform:translateY(-1px); border-color:#9ecb18 !important; }
-[data-testid="stMetric"] { background:white; border:1px solid #e4e8df; padding:15px; border-radius:18px; }
-[data-testid="stTextInput"] input, [data-testid="stTextArea"] textarea { font-size:17px !important; }
-@media (max-width: 700px) {
-  .block-container { padding: .65rem .7rem 3rem .7rem; }
-  .kc-hero { padding:24px 19px; border-radius:22px; }
-  .kc-hero p { font-size:.98rem; }
-  .kc-card { padding:14px; border-radius:17px; }
-  div.stButton > button { min-height:54px !important; font-size:16px !important; }
-  [data-testid="stMetric"] { padding:11px; }
+:root {
+  --kc-lime:#B7E532;
+  --kc-lime-dark:#718d12;
+  --kc-dark:#172019;
+  --kc-cream:#FFF8E8;
+  --kc-coral:#FF7043;
+  --kc-blue:#1769aa;
+  --kc-muted:#4e5a52;
+  --kc-border:#d8dfd2;
+}
+
+/* ===== FONDO REAL DE LA APP ===== */
+.stApp {
+  background:
+    linear-gradient(rgba(255,250,239,.92),rgba(247,250,242,.96)),
+    url("https://images.unsplash.com/photo-1547592180-85f173990554?auto=format&fit=crop&w=2200&q=85") center top/cover fixed !important;
+  color:#182019 !important;
+}
+[data-testid="stAppViewContainer"] { background:transparent !important; }
+[data-testid="stHeader"] { background:rgba(255,255,255,.72) !important; }
+.block-container { max-width:1180px; padding:1rem 1rem 5rem !important; }
+html, body, [class*="stApp"] { font-size:17px !important; color:#182019 !important; }
+
+/* ===== HERO ===== */
+.kc-hero {
+  position:relative; overflow:hidden;
+  border-radius:30px; padding:34px 28px; margin-bottom:22px;
+  min-height:210px;
+  display:flex; flex-direction:column; justify-content:flex-end;
+  background:
+    linear-gradient(90deg,rgba(17,27,20,.96) 0%,rgba(17,27,20,.78) 48%,rgba(17,27,20,.30) 100%),
+    url("https://images.unsplash.com/photo-1498837167922-ddd27525d352?auto=format&fit=crop&w=1800&q=85") center/cover !important;
+  color:#fff !important; box-shadow:0 14px 40px rgba(23,32,25,.20);
+}
+.kc-hero:after { content:""; position:absolute; inset:0; background:linear-gradient(135deg,rgba(183,229,50,.10),transparent 55%); pointer-events:none; }
+.kc-brand { position:absolute; top:18px; left:22px; z-index:2; display:flex; align-items:center; gap:10px; }
+.kc-brand-mark { width:48px; height:48px; border-radius:15px; background:#B7E532; color:#172019; display:grid; place-items:center; font-size:27px; font-weight:900; box-shadow:0 6px 18px rgba(0,0,0,.18); }
+.kc-brand-name { font-weight:950; font-size:1.05rem; letter-spacing:-.5px; }
+.kc-hero h1 { position:relative; z-index:1; font-size:clamp(2.2rem,6vw,4rem); line-height:.98; margin:0 0 10px; letter-spacing:-2px; color:#fff !important; }
+.kc-hero p { position:relative; z-index:1; font-size:1.08rem; margin:0; color:#fff !important; font-weight:650; text-shadow:0 1px 3px rgba(0,0,0,.45); }
+
+/* ===== TITULOS / TARJETAS ===== */
+.kc-section { color:#172019 !important; font-size:1.45rem; font-weight:900; margin:28px 0 12px; letter-spacing:-.4px; }
+.kc-card { background:rgba(255,255,255,.97); color:#172019 !important; border:1px solid var(--kc-border); border-radius:22px; padding:19px; box-shadow:0 9px 26px rgba(23,32,25,.09); margin-bottom:15px; }
+.kc-card * { color:inherit; }
+.kc-muted { color:#425048 !important; font-size:.96rem; }
+.kc-price { color:#172019 !important; font-size:1.7rem; font-weight:950; }
+.kc-note { background:#fff5df; color:#3e321d !important; border:1px solid #f2c982; border-radius:17px; padding:14px 16px; font-weight:650; }
+.kc-note * { color:#3e321d !important; }
+
+/* ===== LOGOS DE TIENDAS ===== */
+.kc-store-grid { display:grid; grid-template-columns:repeat(5,1fr); gap:10px; }
+.kc-store-logo { background:#fff; border:1px solid #dce3d8; border-radius:18px; min-height:82px; padding:12px 8px; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:6px; box-shadow:0 5px 15px rgba(20,30,20,.06); }
+.kc-store-logo strong { font-size:.92rem; color:#172019 !important; text-align:center; }
+.kc-store-icon { width:38px; height:38px; border-radius:12px; display:grid; place-items:center; font-size:21px; font-weight:950; }
+
+/* ===== BOTONES DE SELECCION: SIEMPRE TEXTO LEGIBLE ===== */
+div.stButton > button,
+button[kind="secondary"],
+button[kind="primary"] {
+  min-height:54px !important;
+  width:100% !important;
+  border-radius:17px !important;
+  font-size:16px !important;
+  font-weight:850 !important;
+  letter-spacing:-.1px !important;
+  white-space:normal !important;
+  line-height:1.15 !important;
+  border:2px solid #cfd8ca !important;
+  background:#ffffff !important;
+  color:#172019 !important;
+  -webkit-text-fill-color:#172019 !important;
+  box-shadow:0 4px 13px rgba(20,30,20,.07) !important;
+}
+div.stButton > button p,
+div.stButton > button span,
+div.stButton > button div,
+button[kind="secondary"] p,
+button[kind="secondary"] span,
+button[kind="primary"] p,
+button[kind="primary"] span { color:#172019 !important; -webkit-text-fill-color:#172019 !important; }
+div.stButton > button:hover { background:#f4f9e8 !important; border-color:#8cab25 !important; transform:translateY(-1px); }
+div.stButton > button:focus:not(:active) { background:#eef7d7 !important; color:#172019 !important; }
+/* Seleccionado */
+div.stButton > button[kind="primary"] { background:#B7E532 !important; color:#172019 !important; -webkit-text-fill-color:#172019 !important; border-color:#8eae18 !important; box-shadow:0 5px 16px rgba(113,141,18,.25) !important; }
+div.stButton > button[kind="primary"] p,
+div.stButton > button[kind="primary"] span { color:#172019 !important; -webkit-text-fill-color:#172019 !important; }
+
+/* ===== CAMPOS ===== */
+label, [data-testid="stWidgetLabel"] p, [data-testid="stWidgetLabel"] { color:#172019 !important; font-weight:800 !important; }
+[data-baseweb="input"], [data-baseweb="textarea"], [data-baseweb="select"] { background:#fff !important; border-radius:14px !important; }
+[data-testid="stTextInput"] input, [data-testid="stTextArea"] textarea, input, textarea { color:#172019 !important; -webkit-text-fill-color:#172019 !important; font-size:17px !important; background:#fff !important; }
+[data-testid="stMetric"] { background:rgba(255,255,255,.97) !important; color:#172019 !important; border:1px solid #dce3d8; padding:15px; border-radius:18px; }
+[data-testid="stMetric"] * { color:#172019 !important; }
+
+/* ===== RECETAS ===== */
+.kc-recipe { border-left:7px solid var(--kc-lime); background:rgba(255,255,255,.98); color:#172019 !important; border-radius:20px; padding:21px; margin:13px 0; box-shadow:0 8px 24px rgba(23,32,25,.09); }
+.kc-recipe h2 { color:#172019 !important; }
+.kc-recipe strong, .kc-recipe b { color:#172019 !important; }
+.kc-recipe p, .kc-recipe li { color:#26342b !important; font-size:1rem !important; line-height:1.55 !important; }
+.kc-day { background:#172019; color:#fff !important; border-radius:16px; padding:13px 16px; margin-top:24px; font-size:1.2rem; font-weight:900; }
+.kc-pill { display:inline-block; background:#eef6d3; color:#34410c !important; border-radius:999px; padding:7px 11px; margin:3px; font-weight:750; font-size:.92rem; }
+
+/* ===== RESPONSIVE CELULAR ===== */
+@media (max-width:900px) {
+  .kc-store-grid { grid-template-columns:repeat(2,1fr); }
+}
+@media (max-width:700px) {
+  .block-container { padding:.55rem .65rem 3.5rem !important; }
+  .kc-hero { min-height:225px; padding:26px 18px 22px; border-radius:23px; }
+  .kc-brand { top:14px; left:16px; }
+  .kc-brand-mark { width:43px; height:43px; font-size:23px; }
+  .kc-hero h1 { font-size:2.25rem; letter-spacing:-1.3px; }
+  .kc-hero p { font-size:1rem; }
+  .kc-section { font-size:1.28rem; margin-top:23px; }
+  .kc-card, .kc-recipe { padding:15px; border-radius:17px; }
+  div.stButton > button { min-height:58px !important; font-size:16px !important; padding:8px 10px !important; }
+  .kc-store-logo { min-height:76px; }
+  .kc-store-logo strong { font-size:.82rem; }
+  .kc-pill { font-size:.88rem; }
+  .kc-recipe p, .kc-recipe li { font-size:1rem !important; }
 }
 </style>
 """, unsafe_allow_html=True)
 
 st.markdown("""
 <div class="kc-hero">
-  <h1>🍳 KashCook AI</h1>
+  <div class="kc-brand"><div class="kc-brand-mark">🍳</div><div class="kc-brand-name">KashCook AI</div></div>
+  <h1>KashCook AI</h1>
   <p>Tu sistema inteligente de planificación culinaria y financiera.</p>
-  <p style="margin-top:8px;opacity:.9">Recetas completas · compras reales · presupuesto · PDF</p>
+  <p style="margin-top:8px">Recetas completas · compras · presupuesto · PDF</p>
 </div>
 """, unsafe_allow_html=True)
 
