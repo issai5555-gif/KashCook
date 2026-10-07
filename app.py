@@ -2676,16 +2676,67 @@ def _generar_plan_local(
             costo_individual[rid] = _costo_plan({"dias":[{"dia":1,"comidas":[c]}]}, catalogo, personas)
 
     total_slots = int(dias) * len(comidas)
-    max_repeticiones = max(1, int(math.ceil(total_slots / max(1, len(set(candidatos_des + candidatos_pl))))))
+    # Una semana real puede repetir recetas. El objetivo es variedad, no
+    # obligar a que cada plato sea único cuando eso vuelve imposible el presupuesto.
+    max_repeticiones = max(2, min(4, int(math.ceil(int(dias) / 2))))
 
     mejor_factible = None
     mejor_factible_score = -10**18
     mejor_global = None
     mejor_global_score = -10**18
 
+    # ------------------------------------------------------------
+    # BÚSQUEDA PRESUPUESTARIA DETERMINISTA
+    # ------------------------------------------------------------
+    # Antes de la búsqueda aleatoria probamos combinaciones económicas y
+    # variadas. Esto evita que el azar declare "presupuesto insuficiente"
+    # cuando sí existe una combinación viable.
+    def patrones_baratos(pool):
+        orden = sorted(pool, key=lambda x: costo_individual.get(x, 10**12))[:8]
+        patrones = []
+        if not orden:
+            return patrones
+        for n in range(1, min(4, len(orden)) + 1):
+            for inicio in range(n):
+                patrones.append([orden[(d + inicio) % n] for d in range(int(dias))])
+        return patrones
+
+    patrones_por_tipo = {tipo: patrones_baratos(pools[tipo]) for tipo in pools}
+    mejor_semilla = None
+    mejor_semilla_score = -10**18
+    import itertools as _itertools
+    listas_patrones = [patrones_por_tipo[t] for t in comidas]
+    if all(listas_patrones):
+        for combinacion in _itertools.product(*listas_patrones):
+            slots_seed = [[combinacion[j][d] for j in range(len(comidas))] for d in range(int(dias))]
+            plan_seed = _plan_con_recetas(slots_seed, catalogo, comidas)
+            if not plan_seed:
+                continue
+            nombres_seed = [RECETAS_REALES[r]["nombre"].lower() for row in slots_seed for r in row]
+            tortilla_seed = sum(any(x in n for x in ("tortilla", "quesadilla", "enfrijolada", "taco", "enchilada", "flauta", "chilaquiles")) for n in nombres_seed)
+            if tortilla_seed > max(5, int(total_slots * 0.30)):
+                continue
+            total_seed = _costo_plan(plan_seed, catalogo, personas)
+            if total_seed <= presupuesto:
+                distintas = len(set(r for row in slots_seed for r in row))
+                cocinas_seed = {RECETAS_REALES[r].get("cocina", "Mexicana") for row in slots_seed for r in row}
+                repetidas = total_slots - distintas
+                score_seed = distintas * 60 + len(cocinas_seed) * 70 - repetidas * 35 - tortilla_seed * 12
+                # Preferimos gastar el presupuesto razonablemente, pero siempre
+                # priorizamos que la compra sea realmente posible.
+                score_seed += max(0, presupuesto - total_seed) * -0.08
+                if score_seed > mejor_semilla_score:
+                    mejor_semilla_score = score_seed
+                    mejor_semilla = (plan_seed, total_seed, slots_seed)
+
+    if mejor_semilla:
+        # No terminamos aquí: la búsqueda aleatoria posterior puede encontrar
+        # una combinación todavía más variada dentro del mismo presupuesto.
+        pass
+
     # Muchas combinaciones pequeñas son más útiles que una sola llamada enorme
     # al LLM y no dependen de un JSON de siete días.
-    for _ in range(5000):
+    for _ in range(12000):
         usados = []
         slots = []
         conteo = {}
@@ -2699,7 +2750,7 @@ def _generar_plan_local(
 
                 # Primero evitamos cualquier receta usada en los últimos 3 días
                 # y, mientras exista inventario, evitamos cualquier repetición.
-                recientes = {x for row in slots[-3:] for x in row}
+                recientes = {x for row in slots[-2:] for x in row}
                 disponibles = [x for x in pool if x not in recientes and conteo.get(x, 0) < max_repeticiones]
                 if not disponibles:
                     disponibles = [x for x in pool if conteo.get(x, 0) < max_repeticiones]
@@ -2796,6 +2847,9 @@ def _generar_plan_local(
     if mejor_factible:
         return mejor_factible[0], round(mejor_factible[1], 2)
 
+    if mejor_semilla:
+        return mejor_semilla[0], round(mejor_semilla[1], 2)
+
     # No mentimos si el presupuesto no alcanza. Buscamos el plan más barato
     # encontrado y lo reportamos para que el usuario sepa cuánto falta realmente.
     if mejor_global:
@@ -2842,73 +2896,93 @@ def generar_plan_seguro(
 
 # ============================================================
 # INTERFAZ — KASHCOOK AI
+# Apariencia restaurada: hero con imagen, logos de tiendas, tarjetas y dashboard.
+# La lógica del menú no se modifica aquí.
 # ============================================================
 
 st.markdown("""
 <style>
-.kc-hero{padding:1.2rem 1.4rem;border-radius:18px;background:linear-gradient(135deg,#111827,#243447);color:white;margin-bottom:1rem;}
-.kc-hero h1{margin:0;font-size:2rem;}
-.kc-hero p{margin:.35rem 0 0;color:#d1d5db;}
-.kc-card{padding:1rem 1.1rem;border:1px solid rgba(128,128,128,.25);border-radius:16px;margin:.5rem 0 1rem;}
-.kc-label{font-weight:700;font-size:1.05rem;margin-bottom:.45rem;}
-div.stButton > button[kind="primary"]{min-height:3.2rem;font-size:1.05rem;font-weight:800;border-radius:12px;}
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@600;700;800&display=swap');
+:root { --ink:#17221b; --muted:#68756d; --cream:#f7f5ed; --lime:#b7e34b; --green:#173f2a; --orange:#ff8a3d; --line:#e6e9e2; }
+html,body,[class*="css"] { font-family:'DM Sans',sans-serif; }
+.stApp { background:linear-gradient(180deg,#fbfcf8 0%,#f3f5ef 100%); color:var(--ink); }
+.block-container { max-width:1380px; padding-top:1rem; padding-bottom:3rem; }
+.hero { min-height:340px; border-radius:32px; padding:42px 48px; display:flex; align-items:flex-end; position:relative; overflow:hidden; background:linear-gradient(110deg,rgba(12,43,28,.94),rgba(20,64,40,.74)),url('https://images.unsplash.com/photo-1547592180-85f173990554?auto=format&fit=crop&w=1800&q=85') center/cover; box-shadow:0 20px 55px rgba(19,42,27,.16); margin-bottom:24px; }
+.hero h1 { font-family:'Plus Jakarta Sans'; color:#fff; font-size:clamp(2.5rem,5vw,5rem); line-height:.98; margin:0 0 14px; letter-spacing:-.06em; }
+.hero p { color:#e9f3eb; font-size:1.08rem; max-width:650px; margin:0; }
+.badge { display:inline-block; background:var(--lime); color:#17351f; padding:7px 13px; border-radius:999px; font-weight:800; font-size:.78rem; margin-bottom:14px; }
+.card { background:#fff; border:1px solid var(--line); border-radius:22px; padding:22px; box-shadow:0 8px 28px rgba(22,39,27,.055); margin-bottom:16px; }
+.card h3 { margin:0 0 5px; font-family:'Plus Jakarta Sans'; }
+.muted { color:var(--muted); }
+.store-card { background:#fff; border:1px solid var(--line); border-radius:18px; padding:14px 16px; min-height:84px; box-shadow:0 6px 20px rgba(22,39,27,.04); }
+.store-name { font-weight:800; font-size:1rem; display:flex; align-items:center; gap:9px; }
+.store-logo { width:30px; height:30px; border-radius:9px; object-fit:contain; background:#fff; border:1px solid #e7ebe4; padding:3px; }
+.store-sub { color:#77827b; font-size:.76rem; margin-top:3px; }
+.metric-card { background:#fff; border:1px solid var(--line); border-radius:22px; padding:19px; box-shadow:0 8px 28px rgba(22,39,27,.05); }
+.metric-label { color:var(--muted); font-size:.78rem; font-weight:700; text-transform:uppercase; letter-spacing:.05em; }
+.metric-value { font-family:'Plus Jakarta Sans'; font-size:1.8rem; font-weight:800; margin-top:4px; }
+.day-card { background:#fff; border:1px solid var(--line); border-radius:24px; padding:22px; margin:14px 0; box-shadow:0 8px 28px rgba(22,39,27,.045); }
+.meal { background:#f8faf5; border-radius:16px; padding:15px; margin-top:10px; border-left:5px solid var(--lime); }
+.meal-title { font-family:'Plus Jakarta Sans'; font-weight:800; font-size:1.05rem; }
+.pill { display:inline-block; background:#eef5df; color:#315020; border-radius:999px; padding:5px 9px; margin:3px 3px 0 0; font-size:.74rem; font-weight:700; }
+.section-title { font-family:'Plus Jakarta Sans'; font-size:1.65rem; letter-spacing:-.035em; margin:28px 0 12px; }
+.source { color:#65716a; font-size:.75rem; }
+.small-note { color:#69756e; font-size:.8rem; }
 </style>
-<div class="kc-hero">
-  <h1>🍳 KashCook AI</h1>
-  <p>Tu menú, tus compras y tu presupuesto en un solo lugar</p>
-</div>
 """, unsafe_allow_html=True)
 
-st.markdown("KashCook crea el menú, calcula las cantidades para el número de personas y transforma esas cantidades en productos reales según la presentación disponible.")
+st.markdown("<div class='hero'><div><div class='badge'>KASHCOOK AI · MENÚ + COMPRAS + PRESUPUESTO</div><h1>Come mejor.<br>Compra inteligente.</h1><p>Un plan de comida hecho a tu medida, convertido en una lista de compra real y con precios de referencia para planificar tu semana.</p></div></div>", unsafe_allow_html=True)
 
-# ============================================================
-# CONFIGURACIÓN PRINCIPAL
-# ============================================================
+st.markdown("<div class='section-title'>1 · Diseña tu semana</div>", unsafe_allow_html=True)
 
-st.markdown('<div class="kc-card"><div class="kc-label">🛒 ¿Dónde vas a comprar?</div></div>', unsafe_allow_html=True)
+# Tiendas: mismos datos y mismas 4 tiendas, ahora con los logos visuales restaurados.
+STORE_META_UI = {
+    "Alsuper": {"emoji":"🟡", "domain":"alsuper.com"},
+    "Walmart": {"emoji":"🔵", "domain":"walmart.com.mx"},
+    "Soriana": {"emoji":"🔴", "domain":"soriana.com"},
+    "Bodega Aurrerá": {"emoji":"🟢", "domain":"bodegaaurrera.com.mx"},
+}
+
 tiendas_seleccionadas=[]
 columnas=st.columns(4)
 for i,tienda in enumerate(TIENDAS_DISPONIBLES):
     with columnas[i]:
-        if st.checkbox(tienda, value=(i==0), key=f"tienda_{i}"):
-            tiendas_seleccionadas.append(tienda)
-if not tiendas_seleccionadas:
-    st.warning("Selecciona al menos una tienda.")
+        meta=STORE_META_UI[tienda]
+        seleccionada=st.checkbox(f"{meta['emoji']} {tienda}", value=(i==0), key=f"tienda_{i}")
+        st.markdown(f"<div class='store-card'><div class='store-name'><img class='store-logo' src='https://www.google.com/s2/favicons?domain={meta['domain']}&sz=128'> {tienda}</div><div class='store-sub'>Catálogo de productos y presentaciones</div></div>", unsafe_allow_html=True)
+        if seleccionada: tiendas_seleccionadas.append(tienda)
 
 col1,col2,col3=st.columns(3)
-with col1:
-    dias=st.number_input("📅 Días",1,7,7,1)
-with col2:
-    personas=st.number_input("👨‍👩‍👧‍👦 Personas",1,10,4,1)
-with col3:
-    presupuesto=st.number_input("💰 Presupuesto total (MXN)",200,10000,1500,100)
+with col1: dias=st.number_input("📅 Días",1,7,7,1)
+with col2: personas=st.number_input("👨‍👩‍👧‍👦 Personas",1,10,4,1)
+with col3: presupuesto=st.number_input("💰 Presupuesto total (MXN)",200,10000,1500,100)
 
 col1,col2=st.columns(2)
 with col1:
-    st.markdown('<div class="kc-label">🍽️ Estilo de comida</div>', unsafe_allow_html=True)
+    st.markdown("<div class='section-title' style='font-size:1.25rem'>🍽️ Estilo de comida</div>", unsafe_allow_html=True)
     estilos=st.multiselect("Selecciona uno o varios estilos",["Mexicana","Casera","Asiática","Italiana","Mediterránea","Saludable","Económica","Alta en proteína","Baja en carbohidratos","Desayunos mexicanos","Comida rápida casera"],default=["Mexicana","Casera","Económica"],label_visibility="collapsed")
-    st.caption("KashCook combina las cocinas seleccionadas y busca variedad de platos, proteínas y preparaciones; no se limita a cambiar ingredientes de una misma receta.")
+    st.markdown("<div class='small-note'>KashCook combina las cocinas seleccionadas y busca variedad de platos, proteínas y preparaciones; no se limita a cambiar ingredientes de una misma receta.</div>", unsafe_allow_html=True)
 with col2:
-    st.markdown('<div class="kc-label">🍳 ¿Qué comidas quieres planear?</div>', unsafe_allow_html=True)
+    st.markdown("<div class='section-title' style='font-size:1.25rem'>🍳 ¿Qué comidas quieres planear?</div>", unsafe_allow_html=True)
     comidas=st.multiselect("Selecciona las comidas",["Desayuno","Comida","Cena"],default=["Desayuno","Comida","Cena"],label_visibility="collapsed")
 
 col1,col2=st.columns(2)
 with col1:
-    st.markdown('<div class="kc-label">🔌 Electrodomésticos disponibles</div>', unsafe_allow_html=True)
+    st.markdown("<div class='section-title' style='font-size:1.25rem'>⚙️ Electrodomésticos disponibles</div>", unsafe_allow_html=True)
     electrodomesticos=st.multiselect("Selecciona los que tienes",["Estufa","Horno","Microondas","Air Fryer","Licuadora","Freidora","Olla de presión","Olla lenta","Parrilla eléctrica"],default=["Estufa","Licuadora"],label_visibility="collapsed")
 with col2:
-    st.markdown('<div class="kc-label">⚠️ Restricciones y alergias</div>', unsafe_allow_html=True)
-    restricciones=st.text_area("Indica alergias, alimentos que no consumen o restricciones",placeholder="Ejemplo: sin camarón, sin cacahuate, no picante, vegetariano...",label_visibility="collapsed")
+    st.markdown("<div class='section-title' style='font-size:1.25rem'>⚠️ Restricciones y alergias</div>", unsafe_allow_html=True)
+    restricciones=st.text_area("Indica alergias, alimentos que no consumen o restricciones",placeholder="Ejemplo: sin cacahuate, no picante, vegetariano...",label_visibility="collapsed")
 
-st.markdown("### 🚀 Listo para crear tu menú")
+st.markdown("<div class='section-title'>2 · Crear tu menú</div>", unsafe_allow_html=True)
 colg1,colg2=st.columns([3,1])
-with colg1:
-    generar_menu=st.button("🚀 GENERAR MI MENÚ", type="primary", use_container_width=True)
-with colg2:
-    otra_opcion=st.button("🔄 OTRA OPCIÓN", use_container_width=True)
+with colg1: generar_menu=st.button("🚀 GENERAR MI MENÚ", type="primary", use_container_width=True)
+with colg2: otra_opcion=st.button("🔄 OTRA OPCIÓN", use_container_width=True)
+
 if otra_opcion:
-    st.session_state["kc_semilla_menu"]=__import__("random").SystemRandom().randint(1,10**9)
+    st.session_state["kc_semilla_menu"] = __import__("random").SystemRandom().randint(1,10**9)
     st.rerun()
+
 if generar_menu:
     if not comidas:
         st.error("Selecciona al menos una comida.")
@@ -2917,8 +2991,7 @@ if generar_menu:
         st.error("Selecciona al menos una tienda.")
         st.stop()
     catalogo=[]
-    for tienda in tiendas_seleccionadas:
-        catalogo.extend(CATALOGOS.get(tienda,[]))
+    for tienda in tiendas_seleccionadas: catalogo.extend(CATALOGOS.get(tienda,[]))
     if not catalogo:
         st.error("No hay productos disponibles para las tiendas seleccionadas.")
         st.stop()
@@ -2934,12 +3007,10 @@ if generar_menu:
             st.success("Plan generado correctamente con recetas reales.")
         except Exception as e:
             st.error(f"Ocurrió un error al generar el plan: {e}")
-            st.stop()
 
 # ============================================================
-# RESULTADO
+# RESULTADO — dashboard visual restaurado
 # ============================================================
-
 if "plan" in st.session_state:
     plan=st.session_state["plan"]
     compra=st.session_state["compra"]
@@ -2947,35 +3018,56 @@ if "plan" in st.session_state:
     presupuesto=st.session_state["presupuesto"]
     personas=st.session_state["personas"]
     tiendas=st.session_state["tiendas"]
-    st.divider()
-    st.header("📋 Tu plan")
-    st.info("Los platillos se seleccionan de una biblioteca de recetas reales; KashCook no inventa nombres de platillos. El cálculo usa las presentaciones y precios del catálogo local y no los presenta como precio de caja en tiempo real.")
-    c1,c2,c3=st.columns(3)
-    with c1: st.metric("Presupuesto",f"${presupuesto:,.2f}")
-    with c2: st.metric("Compra calculada",f"${total:,.2f}")
-    with c3: st.metric("Disponible",f"${max(0,presupuesto-total):,.2f}")
-    if total<=presupuesto:
-        st.success(f"La compra está dentro del presupuesto. Quedan ${presupuesto-total:,.2f}.")
+    st.markdown("<div class='section-title'>3 · Tu dashboard</div>", unsafe_allow_html=True)
+    c1,c2,c3,c4=st.columns(4)
+    with c1: st.markdown(f"<div class='metric-card'><div class='metric-label'>Presupuesto</div><div class='metric-value'>${presupuesto:,.2f}</div></div>",unsafe_allow_html=True)
+    with c2: st.markdown(f"<div class='metric-card'><div class='metric-label'>Compra calculada</div><div class='metric-value'>${total:,.2f}</div></div>",unsafe_allow_html=True)
+    with c3: st.markdown(f"<div class='metric-card'><div class='metric-label'>Disponible</div><div class='metric-value'>${max(0,presupuesto-total):,.2f}</div></div>",unsafe_allow_html=True)
+    with c4:
+        util=(total/presupuesto*100) if presupuesto else 0
+        st.markdown(f"<div class='metric-card'><div class='metric-label'>Uso del presupuesto</div><div class='metric-value'>{util:.0f}%</div></div>",unsafe_allow_html=True)
 
-    st.header("🍽️ Menú")
+    st.markdown("<div class='card'><b>ℹ️ KashCook utiliza recetas de una biblioteca real y calcula la compra agrupando ingredientes y respetando presentaciones comerciales. Los precios del catálogo son referencias para planificación y no se presentan como precios de caja en tiempo real.</b></div>", unsafe_allow_html=True)
+
+    tabs=st.tabs(["🍽️ Menú","🛒 Compras","💰 Presupuesto","👨‍🍳 Recetas","📄 PDF"])
     catalogo_global=[]
     for lista in CATALOGOS.values(): catalogo_global.extend(lista)
     productos_por_id={p["id"]:p for p in catalogo_global}
-    for dia in plan.get("dias",[]):
-        with st.expander(f"Día {dia.get('dia','')}", expanded=(dia.get('dia')==1)):
+
+    with tabs[0]:
+        for dia in plan.get("dias",[]):
+            st.markdown(f"<div class='day-card'><h3>Día {dia.get('dia','')}</h3>",unsafe_allow_html=True)
             for comida in dia.get("comidas",[]):
-                st.markdown(f"### {comida.get('tipo','Comida')}: {comida.get('nombre','')}")
-                if comida.get("fuente"): st.caption(f"Referencia culinaria: {comida.get('fuente')}")
-                st.markdown("**Ingredientes:**")
+                pills="".join([f"<span class='pill'>{productos_por_id.get(x.get('producto_id'),{}).get('nombre',x.get('producto_id'))} · {x.get('cantidad_por_persona')} {x.get('unidad')}</span>" for x in comida.get('ingredientes',[])])
+                st.markdown(f"<div class='meal'><div class='meal-title'>{comida.get('tipo','Comida')} · {comida.get('nombre','')}</div>{pills}</div>",unsafe_allow_html=True)
+                if comida.get("fuente"): st.markdown(f"<div class='source'>Referencia culinaria: {comida.get('fuente')}</div>",unsafe_allow_html=True)
+            st.markdown("</div>",unsafe_allow_html=True)
+
+    with tabs[1]:
+        for x in compra:
+            st.markdown(f"<div class='card'><h3>{x['producto']}</h3><div class='muted'>{x['presentacion']} · {x['paquetes']} paquete(s) · {x['tienda']}</div><p><b>${x['precio_unitario']:,.2f} c/u</b> · subtotal <b>${x['subtotal']:,.2f}</b></p></div>",unsafe_allow_html=True)
+
+    with tabs[2]:
+        restante=presupuesto-total
+        if restante>=0:
+            st.success(f"La compra está dentro del presupuesto. Quedan ${restante:,.2f}.")
+        else:
+            st.error(f"La compra supera el presupuesto por ${abs(restante):,.2f}.")
+        st.progress(min(max(total/presupuesto,0),1.0) if presupuesto else 0)
+
+    with tabs[3]:
+        for dia in plan.get("dias",[]):
+            st.markdown(f"### Día {dia.get('dia','')}")
+            for comida in dia.get("comidas",[]):
+                st.markdown(f"#### {comida.get('tipo','Comida')}: {comida.get('nombre','')}")
+                if comida.get("fuente"): st.caption(f"Referencia: {comida.get('fuente')}")
+                st.markdown("**Ingredientes por persona:**")
                 for ing in comida.get("ingredientes",[]):
                     p=productos_por_id.get(ing.get("producto_id")); nombre=p["nombre"] if p else str(ing.get("producto_id"))
-                    st.write(f"- {nombre}: {ing.get('cantidad_por_persona','')} {ing.get('unidad','')} por persona")
+                    st.write(f"- {nombre}: {ing.get('cantidad_por_persona','')} {ing.get('unidad','')}")
                 st.markdown("**Preparación:**")
-                for n,paso in enumerate(comida.get("preparacion",[]) or ["Preparar los ingredientes y cocinar completamente."],1): st.write(f"{n}. {paso}")
+                for n,paso in enumerate(comida.get("preparacion",[]) or [],1): st.write(f"{n}. {paso}")
 
-    st.header("🛒 Lista de compra")
-    datos_tabla=[{"Producto":i["producto"],"Presentación":i["presentacion"],"Cantidad":i["paquetes"],"Precio unitario":f"${i['precio_unitario']:,.2f}","Total":f"${i['subtotal']:,.2f}","Tienda":i["tienda"]} for i in compra]
-    if datos_tabla: st.dataframe(datos_tabla,use_container_width=True,hide_index=True)
-    st.subheader(f"💰 Total: ${total:,.2f} MXN")
-    pdf_bytes=generar_pdf(plan=plan,compra=compra,total=total,presupuesto=presupuesto,personas=personas,tiendas=tiendas)
-    st.download_button("📄 Descargar plan completo en PDF",data=pdf_bytes,file_name="KashCook_AI_Plan.pdf",mime="application/pdf",use_container_width=True)
+    with tabs[4]:
+        pdf_bytes=generar_pdf(plan=plan,compra=compra,total=total,presupuesto=presupuesto,personas=personas,tiendas=tiendas)
+        st.download_button("📄 Descargar plan completo en PDF",data=pdf_bytes,file_name="KashCook_AI_Plan.pdf",mime="application/pdf",use_container_width=True)
