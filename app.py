@@ -1070,30 +1070,32 @@ def obtener_cliente_groq():
 # LLAMADA A GROQ
 # ============================================================
 
-def llamar_groq(cliente, prompt, temperatura=0.4):
-    """Llamada compacta y tolerante a Groq.
+def llamar_groq(cliente, prompt, temperatura=0.35, max_tokens=4000):
+    """Llamada optimizada a Groq. GPT-OSS 20B es el motor rápido para KashCook.
 
-    No usa response_format=json_object porque gpt-oss puede rechazar una
-    generación parcialmente válida con json_validate_failed. La validación
-    del JSON se hace localmente en extraer_json(), donde podemos reparar
-    Markdown, comillas y truncamientos sin perder el control de la app.
+    Se usa razonamiento bajo y sin retorno del razonamiento para reducir
+    latencia y consumo. El JSON se valida localmente para evitar que una
+    respuesta parcial derribe todo el plan.
     """
     respuesta = cliente.chat.completions.create(
-        model="openai/gpt-oss-120b",
+        model="openai/gpt-oss-20b",
         messages=[
             {
                 "role": "system",
                 "content": (
-                    "Eres KashCook AI. Genera planes de comida. "
-                    "Cuando se solicite JSON, responde EXCLUSIVAMENTE un objeto JSON válido, "
-                    "sin Markdown, sin comentarios y sin texto adicional. "
-                    "Usa respuestas compactas."
+                    "Eres KashCook AI, chef profesional. "
+                    "Cuando se solicite JSON responde solamente JSON válido, "
+                    "sin Markdown ni texto fuera del objeto. Sé preciso y completo, "
+                    "pero evita explicaciones innecesarias."
                 ),
             },
             {"role": "user", "content": prompt},
         ],
         temperature=temperatura,
-        max_tokens=3200,
+        max_completion_tokens=max_tokens,
+        reasoning_effort="low",
+        include_reasoning=False,
+        response_format={"type": "json_object"},
     )
 
     contenido = respuesta.choices[0].message.content
@@ -2349,40 +2351,57 @@ def _resolver_producto_por_nombre(valor, catalogo):
     return None
 
 
-def _prompt_comida(tienda_texto, dia, tipo_comida, personas, estilos,
-                   electrodomesticos, restricciones):
-    """Genera UNA sola comida completa por llamada para evitar truncamientos."""
+def _prompt_bloque(tienda_texto, dias_bloque, personas, estilos, comidas,
+                   electrodomesticos, restricciones, catalogo):
+    indice = _indice_ingredientes(catalogo)
+    indice_texto = "\n".join(
+        f"{k}:{'/'.join(v[:3])}" for k, v in sorted(indice.items())
+    )
+    estilos_texto = ",".join(estilos) if estilos else "Libre"
+    equipo = ",".join(electrodomesticos) if electrodomesticos else "Cocina convencional"
+    restricciones = (restricciones or "Ninguna").strip()[:700]
+    comidas_texto = ",".join(comidas)
+    dias_texto = ",".join(str(x) for x in dias_bloque)
+
+    return f"""KashCook AI — bloque de días {dias_texto}.\n\nGenera SOLO los días {dias_texto}, para {personas} personas. Cada día debe contener EXACTAMENTE estas comidas: {comidas_texto}.\nEstilos: {estilos_texto}. Equipo: {equipo}. Restricciones: {restricciones}. Tiendas: {tienda_texto}.\n\nCALIDAD: crea platillos completos y sustanciosos, no recetas básicas. No hay límite de ingredientes ni de pasos. Usa los ingredientes necesarios para que cada receta sea realmente buena: proteína, verduras, aromáticos, salsa/adobo, guarnición y complementos cuando correspondan. Normalmente 6-12 ingredientes y 4-10 pasos son perfectamente válidos, pero no fuerces esos números. Varía proteínas y evita repetir preparaciones.\n\nNunca uses la palabra Almuerzo. Cantidades por persona. Unidades claras. Usa ingredientes del índice cuando existan.\nÍNDICE:\n{indice_texto}\n\nJSON: {{"dias":[{{"dia":{dias_bloque[0]},"comidas":[{{"tipo":"Comida","nombre":"...","ingredientes":[{{"ingrediente":"pollo","cantidad_por_persona":180,"unidad":"g"}}],"preparacion":["...","..."]}}]}}]}}\nDevuelve SOLO JSON válido. No Markdown. No explicaciones."""
+
+
+def _prompt_dia(tienda_texto, dia, personas, estilos, comidas,
+                electrodomesticos, restricciones, max_sugerido=4000):
+    """Prompt de un día completo. Reduce 3 llamadas de IA a 1 por día."""
     estilos_texto = ", ".join(estilos) if estilos else "Libre"
     equipo = ", ".join(electrodomesticos) if electrodomesticos else "Cocina convencional"
     restricciones = (restricciones or "Ninguna").strip()[:500]
+    comidas_json = ", ".join(
+        f'{{"tipo":"{c}","nombre":"Nombre del platillo","ingredientes":[{{"ingrediente":"pollo","cantidad_por_persona":180,"unidad":"g"}}],"preparacion":["Paso 1","Paso 2","Paso 3"]}}'
+        for c in comidas
+    )
 
-    return f"""KashCook AI. Actúa como chef profesional y genera UNA SOLA receta completa.
+    return f"""KashCook AI. Genera el menú COMPLETO del DÍA {dia} para {personas} persona(s).
 
-DÍA: {dia}
-TIPO DE COMIDA: {tipo_comida}
-PERSONAS: {personas}
 ESTILOS: {estilos_texto}
-EQUIPO DISPONIBLE: {equipo}
+EQUIPO: {equipo}
 RESTRICCIONES/ALERGIAS: {restricciones}
-TIENDAS DE REFERENCIA: {tienda_texto}
+TIENDAS: {tienda_texto}
+COMIDAS OBLIGATORIAS: {", ".join(comidas)}
 
-CALIDAD CULINARIA OBLIGATORIA:
-- Elabora un platillo sustancioso, abundante, apetitoso y realmente cocinable.
-- NO limites artificialmente la cantidad de ingredientes. Usa todos los ingredientes necesarios para que la receta quede bien hecha.
-- Puede incluir proteína, verduras, base, guarnición, salsa, adobo, chiles, especias, hierbas, aromáticos, lácteos, aceites y complementos cuando correspondan.
-- NO limites artificialmente los pasos. Explica la preparación completa y en orden lógico.
-- No hagas recetas pobres de 2 o 3 ingredientes salvo que sea propio del platillo.
-- Busca cocina mexicana/casera/regional auténtica según los estilos elegidos.
-- Varía las proteínas y evita repetir preparaciones obvias.
-- Respeta estrictamente restricciones y equipo disponible.
+REGLAS CULINARIAS:
+- Cada comida debe ser un platillo sustancioso, abundante, apetitoso y realmente cocinable.
+- NO existe límite artificial de ingredientes ni de pasos. Usa todos los que el platillo necesite.
+- Incluye proteína, verduras, base, guarnición, salsa/adobo, aromáticos, especias y complementos cuando correspondan.
+- No hagas recetas pobres o de 2-3 ingredientes salvo que el platillo lo requiera naturalmente.
+- Varía proteínas y preparaciones entre días; usa pollo, res, cerdo, pescado, atún, sardina, huevo y opciones económicas cuando sean adecuadas.
+- Evita repetir el mismo platillo o la misma preparación.
 - Las cantidades son POR PERSONA.
-- Usa unidades claras: g, kg, ml, pieza, lata, taza, cucharada, cucharadita, diente, etc.
+- Unidades claras: g, kg, ml, pieza, lata, taza, cucharada, cucharadita, diente, etc.
 - Nunca uses la palabra "Almuerzo".
+- Respeta estrictamente las restricciones y el equipo disponible.
+- Las recetas deben ser completas, no bocetos.
 
-Devuelve EXACTAMENTE este objeto JSON y NADA MÁS:
-{{"dia":{dia},"comida":{{"tipo":"{tipo_comida}","nombre":"Nombre completo del platillo","ingredientes":[{{"ingrediente":"pollo","cantidad_por_persona":180,"unidad":"g"}}],"preparacion":["Paso detallado 1","Paso detallado 2"]}}}}
+ESTRUCTURA EXACTA: devuelve solamente este objeto JSON:
+{{"dias":[{{"dia":{dia},"comidas":[{comidas_json}]}}]}}
 
-IMPORTANTE: cierra correctamente TODAS las llaves y corchetes. No agregues texto fuera del JSON."""
+Cierra todas las llaves y corchetes. No agregues texto antes ni después del JSON."""
 
 
 def _extraer_comida(respuesta, dia, tipo_comida):
@@ -2390,7 +2409,6 @@ def _extraer_comida(respuesta, dia, tipo_comida):
     if not isinstance(obj, dict):
         raise ValueError("La IA no devolvió un objeto JSON.")
 
-    # Aceptar también una respuesta con dias/comidas si el modelo se desvía.
     if obj.get("comida"):
         comida = obj["comida"]
     elif obj.get("dias"):
@@ -2399,57 +2417,94 @@ def _extraer_comida(respuesta, dia, tipo_comida):
         if not encontrados or not encontrados[0].get("comidas"):
             raise ValueError(f"La IA no devolvió la comida {tipo_comida} del día {dia}.")
         comidas = encontrados[0]["comidas"]
-        comida = next((c for c in comidas if c.get("tipo") == tipo_comida), comidas[0])
+        comida = next((c for c in comidas if c.get("tipo") == tipo_comida), None)
+        if comida is None:
+            raise ValueError(f"La IA no devolvió {tipo_comida} del día {dia}.")
     else:
         raise ValueError("La IA no devolvió la estructura esperada.")
 
     if not isinstance(comida, dict):
         raise ValueError("La receta recibida no es válida.")
-    if str(comida.get("tipo", "")).strip() != tipo_comida:
-        comida["tipo"] = tipo_comida
     if not comida.get("nombre"):
         raise ValueError("La receta no tiene nombre.")
     if not isinstance(comida.get("ingredientes"), list) or not comida["ingredientes"]:
         raise ValueError("La receta no tiene ingredientes.")
     if not isinstance(comida.get("preparacion"), list) or not comida["preparacion"]:
         raise ValueError("La receta no tiene preparación.")
+    comida["tipo"] = tipo_comida
     return comida
 
 
 def generar_plan_por_bloques(cliente, dias, personas, estilos, comidas,
                               electrodomesticos, restricciones, catalogo,
                               tiendas):
-    """Genera una comida por llamada: recetas completas sin truncar el JSON."""
+    """Genera un día completo por llamada.
+
+    Antes se hacían hasta 21 llamadas para un plan de 7 días x 3 comidas.
+    Ahora son 7 llamadas, una por día, reduciendo drásticamente la espera y
+    manteniendo recetas completas. Los reintentos son por día, no por comida.
+    """
     resultado = {"dias": []}
     tienda_texto = ", ".join(tiendas)
+    cantidad_comidas = len(comidas)
+    max_tokens = 2200 if cantidad_comidas == 1 else 3600 if cantidad_comidas == 2 else 5000
 
-    for dia in range(1, int(dias) + 1):
-        dia_obj = {"dia": dia, "comidas": []}
-        for tipo_comida in comidas:
-            prompt = _prompt_comida(
-                tienda_texto, dia, tipo_comida, personas, estilos,
-                electrodomesticos, restricciones
+    progreso = st.progress(0, text="Preparando tu menú...")
+    total_dias = int(dias)
+
+    for dia in range(1, total_dias + 1):
+        prompt = _prompt_dia(
+            tienda_texto, dia, personas, estilos, comidas,
+            electrodomesticos, restricciones, max_tokens
+        )
+        ultimo_error = None
+        dia_obj = None
+
+        for intento in range(1, 3):
+            try:
+                respuesta = llamar_groq(
+                    cliente, prompt,
+                    temperatura=0.35 if intento == 1 else 0.15,
+                    max_tokens=max_tokens,
+                )
+                obj = extraer_json(respuesta)
+                if not isinstance(obj, dict) or not isinstance(obj.get("dias"), list):
+                    raise ValueError("La IA no devolvió el día en el formato esperado.")
+                candidatos = [d for d in obj["dias"] if int(d.get("dia", -1)) == dia]
+                if not candidatos:
+                    raise ValueError(f"No se encontró el día {dia} en la respuesta.")
+                dia_obj = candidatos[0]
+                comidas_recibidas = dia_obj.get("comidas") or []
+                recibidas = {normalizar_texto(c.get("tipo")): c for c in comidas_recibidas if isinstance(c, dict)}
+                requeridas = {normalizar_texto(c): c for c in comidas}
+                faltantes = [c for c in comidas if normalizar_texto(c) not in recibidas]
+                if faltantes:
+                    raise ValueError("Faltan comidas: " + ", ".join(faltantes))
+
+                dia_obj["comidas"] = []
+                for tipo in comidas:
+                    comida = recibidas[normalizar_texto(tipo)]
+                    comida["tipo"] = tipo
+                    if not comida.get("nombre") or not comida.get("ingredientes") or not comida.get("preparacion"):
+                        raise ValueError(f"{tipo} del día {dia} está incompleta.")
+                    dia_obj["comidas"].append(comida)
+                break
+            except Exception as exc:
+                ultimo_error = exc
+                if intento == 1:
+                    prompt = prompt + "\nREINTENTO: corrige únicamente la estructura y entrega TODAS las comidas solicitadas. No recortes ingredientes ni pasos."
+
+        if dia_obj is None:
+            progreso.empty()
+            raise ValueError(
+                f"No se pudo generar el día {dia}. Se realizaron 2 intentos. "
+                f"Último error: {ultimo_error}"
             )
-            ultimo_error = None
-            comida = None
-            for intento in range(1, 4):
-                try:
-                    temperatura = 0.50 if intento == 1 else 0.20
-                    respuesta = llamar_groq(cliente, prompt, temperatura=temperatura)
-                    comida = _extraer_comida(respuesta, dia, tipo_comida)
-                    break
-                except Exception as exc:
-                    ultimo_error = exc
-                    if intento < 3:
-                        prompt = prompt + f"\nREINTENTO {intento + 1}: la respuesta anterior fue inválida. Genera nuevamente la receta completa y termina el JSON correctamente."
-            if comida is None:
-                raise ValueError(
-                    f"No se pudo generar {tipo_comida} del día {dia}. "
-                    f"Se realizaron 3 intentos sin obtener un JSON completo."
-                ) from ultimo_error
-            dia_obj["comidas"].append(comida)
-        resultado["dias"].append(dia_obj)
 
+        resultado["dias"].append(dia_obj)
+        progreso.progress(dia / total_dias, text=f"👨‍🍳 Día {dia} de {total_dias} listo")
+
+    progreso.empty()
     return normalizar_plan(resultado)
 
 def toggle_seleccion(clave, valor):
