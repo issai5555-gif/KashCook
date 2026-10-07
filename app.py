@@ -1099,7 +1099,7 @@ antes o después del JSON.
 
         temperature=temperatura,
 
-        max_tokens=16000,
+        max_tokens=24000,
 
         response_format={
             "type": "json_object"
@@ -1462,6 +1462,90 @@ def validar_plan(plan):
             dias_validos += 1
 
     return dias_validos > 0
+
+
+# ============================================================
+# VALIDACIÓN COMPLETA DEL PLAN
+# ============================================================
+
+def normalizar_texto(valor):
+    """Normaliza texto para comparar nombres de comidas sin importar mayúsculas/acentos."""
+    texto = str(valor or "").strip().lower()
+    reemplazos = {
+        "á": "a",
+        "é": "e",
+        "í": "i",
+        "ó": "o",
+        "ú": "u",
+        "ü": "u",
+    }
+    for origen, destino in reemplazos.items():
+        texto = texto.replace(origen, destino)
+    return texto
+
+
+def validar_plan_completo(plan, dias_solicitados, comidas_solicitadas):
+    """Comprueba que el plan tenga exactamente los días y comidas solicitados."""
+    if not validar_plan(plan):
+        return False
+
+    dias = plan.get("dias", [])
+    if len(dias) != int(dias_solicitados):
+        return False
+
+    esperadas = [normalizar_texto(x) for x in comidas_solicitadas]
+
+    for indice, dia in enumerate(dias, 1):
+        if not isinstance(dia, dict):
+            return False
+
+        comidas = dia.get("comidas", [])
+        if len(comidas) != len(esperadas):
+            return False
+
+        tipos = [normalizar_texto(c.get("tipo")) for c in comidas]
+        if sorted(tipos) != sorted(esperadas):
+            return False
+
+        for comida in comidas:
+            if not comida.get("nombre"):
+                return False
+            if not comida.get("ingredientes"):
+                return False
+            if not comida.get("preparacion"):
+                return False
+
+    return True
+
+
+def construir_prompt_reintento(prompt_original, dias, comidas):
+    """Solicita nuevamente el plan cuando la primera respuesta quedó incompleta."""
+    return f"""
+La respuesta anterior fue rechazada porque estaba INCOMPLETA.
+
+Debes generar nuevamente el plan completo.
+
+REQUISITOS OBLIGATORIOS:
+- Exactamente {dias} días.
+- Cada día debe contener exactamente estas comidas: {", ".join(comidas)}.
+- Cada comida debe tener nombre.
+- Cada comida debe tener al menos 2 ingredientes válidos del catálogo.
+- Cada comida debe tener preparación con al menos 3 pasos.
+- Cada ingrediente debe tener producto_id, cantidad_por_persona y unidad.
+- No omitas días.
+- No omitas comidas.
+- Devuelve exclusivamente JSON válido.
+
+INSTRUCCIONES ORIGINALES:
+{prompt_original}
+
+ANTES DE RESPONDER, verifica internamente:
+1. Que existan exactamente {dias} objetos dentro de "dias".
+2. Que cada objeto tenga exactamente las comidas solicitadas.
+3. Que ninguna comida esté vacía.
+4. Que todos los ingredientes utilicen IDs del catálogo.
+5. Que el JSON esté completo y cerrado.
+"""
 
 
 # ============================================================
@@ -1862,6 +1946,14 @@ del catálogo.
 24. Cada comida debe incluir preparación.
 
 25. Las preparaciones deben ser claras y cocinables.
+
+26. DEBES devolver EXACTAMENTE el número de días solicitado.
+
+27. CADA día debe contener EXACTAMENTE todas las comidas solicitadas.
+
+28. NO puedes omitir ningún día ni ninguna comida solicitada.
+
+29. Antes de responder, verifica que el JSON tenga todos los días y comidas requeridos.
 
 ============================================================
 CATÁLOGO
@@ -2276,7 +2368,7 @@ def generar_pdf(
                         f"{cantidad} "
                         f"{html.escape(str(unidad))} "
                         f"por persona",
-                        pequeño,
+                        texto_pequeno,
                     )
                 )
 
@@ -2315,7 +2407,7 @@ def generar_pdf(
                     Paragraph(
                         f"{numero}. "
                         f"{html.escape(str(paso))}",
-                        pequeño,
+                        texto_pequeno,
                     )
                 )
 
@@ -2850,13 +2942,43 @@ if st.button(
                 plan_raw
             )
 
-            if not validar_plan(
-                plan
+            # La primera respuesta debe estar completa. Si no lo está,
+            # hacemos un segundo intento específicamente para reparar
+            # días/comidas faltantes antes de continuar.
+            if not validar_plan_completo(
+                plan,
+                dias,
+                comidas,
             ):
+                prompt_reintento = construir_prompt_reintento(
+                    prompt_original=prompt,
+                    dias=dias,
+                    comidas=comidas,
+                )
 
+                respuesta_reintento = llamar_groq(
+                    cliente,
+                    prompt_reintento,
+                    temperatura=0.25,
+                )
+
+                plan_reintento_raw = extraer_json(
+                    respuesta_reintento
+                )
+
+                plan = normalizar_plan(
+                    plan_reintento_raw
+                )
+
+            if not validar_plan_completo(
+                plan,
+                dias,
+                comidas,
+            ):
                 raise ValueError(
-                    "La IA no devolvió suficientes "
-                    "datos para construir el plan."
+                    "La IA devolvió un plan incompleto. "
+                    f"Se requieren exactamente {dias} día(s) "
+                    f"con las comidas: {', '.join(comidas)}."
                 )
 
             # =================================================
