@@ -1070,85 +1070,34 @@ def obtener_cliente_groq():
 # LLAMADA A GROQ
 # ============================================================
 
-def _schema_comida():
-    """Schema pequeño: una sola comida por llamada para evitar truncamientos."""
-    return {
-        "type": "object",
-        "properties": {
-            "tipo": {"type": "string"},
-            "nombre": {"type": "string"},
-            "ingredientes": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "ingrediente": {"type": "string"},
-                        "cantidad_por_persona": {"type": "number"},
-                        "unidad": {"type": "string"}
-                    },
-                    "required": ["ingrediente", "cantidad_por_persona", "unidad"],
-                    "additionalProperties": False
-                }
+def llamar_groq(cliente, prompt, temperatura=0.4):
+
+    respuesta = cliente.chat.completions.create(
+        model="openai/gpt-oss-120b",
+        messages=[
+            {
+                "role": "system",
+                "content": (
+                    "Eres KashCook AI. Diseñas menús familiares, "
+                    "recetas, cantidades y compras. Responde solo "
+                    "JSON válido cuando se solicite un plan."
+                ),
             },
-            "preparacion": {
-                "type": "array",
-                "items": {"type": "string"}
-            }
-        },
-        "required": ["tipo", "nombre", "ingredientes", "preparacion"],
-        "additionalProperties": False
-    }
+            {
+                "role": "user",
+                "content": prompt,
+            },
+        ],
+        temperature=temperatura,
+        max_tokens=8000,
+        response_format={"type": "json_object"},
+    )
 
-def _schema_dia():
-    """Se conserva por compatibilidad; la generación nueva usa _schema_comida()."""
-    comida = _schema_comida()
-    return {
-        "type": "object",
-        "properties": {
-            "dias": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "dia": {"type": "integer"},
-                        "comidas": {"type": "array", "items": comida}
-                    },
-                    "required": ["dia", "comidas"],
-                    "additionalProperties": False
-                }
-            }
-        },
-        "required": ["dias"],
-        "additionalProperties": False
-    }
+    contenido = respuesta.choices[0].message.content
 
-def llamar_groq(cliente, prompt, temperatura=0.35, max_tokens=4000, schema=None):
-    kwargs={
-        "model":"openai/gpt-oss-20b",
-        "messages":[
-            {"role":"system","content":"Eres KashCook AI, chef profesional. Cumple exactamente la estructura solicitada. Devuelve únicamente el contenido pedido."},
-            {"role":"user","content":prompt}],
-        "temperature":temperatura,
-        "max_completion_tokens":int(max_tokens),
-        "reasoning_effort":"low",
-        "reasoning_format":"hidden",
-    }
-    if schema:
-        kwargs["response_format"]={"type":"json_schema","json_schema":{"name":"kashcook_dia","strict":True,"schema":schema}}
-    else:
-        kwargs["response_format"]={"type":"json_object"}
-    try:
-        respuesta=cliente.chat.completions.create(**kwargs)
-    except Exception as exc:
-        msg=str(exc).lower()
-        if schema and any(x in msg for x in ("400","schema","structured","response_format")):
-            kwargs["response_format"]={"type":"json_object"}
-            respuesta=cliente.chat.completions.create(**kwargs)
-        else:
-            raise
-    contenido=respuesta.choices[0].message.content
     if not contenido:
         raise ValueError("Groq no devolvió contenido.")
+
     return contenido
 
 
@@ -1157,40 +1106,59 @@ def llamar_groq(cliente, prompt, temperatura=0.35, max_tokens=4000, schema=None)
 # ============================================================
 
 def extraer_json(texto):
-    """Extrae JSON incluso si el modelo añadió Markdown o texto alrededor."""
+
     if not texto:
-        raise ValueError("La IA no devolvió contenido.")
+        raise ValueError(
+            "La IA no devolvió contenido."
+        )
 
-    texto = str(texto).strip()
-    candidatos = [texto]
-    limpio = re.sub(r"```(?:json)?", "", texto, flags=re.IGNORECASE).replace("```", "").strip()
-    if limpio not in candidatos:
-        candidatos.append(limpio)
+    texto = texto.strip()
 
-    # Extrae desde la primera llave hasta la última, ignorando texto exterior.
-    ini = limpio.find("{")
-    fin = limpio.rfind("}")
-    if ini >= 0 and fin > ini:
-        candidatos.append(limpio[ini:fin + 1])
+    # Intento directo
+    try:
+        return json.loads(texto)
+    except Exception:
+        pass
 
-    # Quita trailing commas, un error frecuente de modelos generativos.
-    for candidato in list(candidatos):
-        reparado = re.sub(r",\s*([}\]])", r"\1", candidato)
-        if reparado not in candidatos:
-            candidatos.append(reparado)
+    # Eliminar Markdown
+    texto_limpio = re.sub(
+        r"```json",
+        "",
+        texto,
+        flags=re.IGNORECASE,
+    )
 
-    errores = []
-    for candidato in candidatos:
+    texto_limpio = re.sub(
+        r"```",
+        "",
+        texto_limpio,
+    )
+
+    texto_limpio = texto_limpio.strip()
+
+    try:
+        return json.loads(texto_limpio)
+    except Exception:
+        pass
+
+    # Buscar objeto JSON
+    inicio = texto_limpio.find("{")
+    fin = texto_limpio.rfind("}")
+
+    if inicio >= 0 and fin > inicio:
+
+        posible_json = texto_limpio[
+            inicio:fin + 1
+        ]
+
         try:
-            obj = json.loads(candidato)
-            if isinstance(obj, dict):
-                return obj
-        except Exception as exc:
-            errores.append(str(exc))
+            return json.loads(posible_json)
+        except Exception:
+            pass
 
     raise ValueError(
-        "No fue posible interpretar la respuesta de la IA como JSON. "
-        "La respuesta pudo haber quedado truncada; se solicitará una corrección compacta."
+        "No fue posible interpretar la respuesta "
+        "de la IA como JSON."
     )
 
 
@@ -1297,20 +1265,6 @@ def normalizar_plan(plan):
                     or ing.get("product_id")
                     or ing.get("id")
                 )
-
-                # Compatibilidad: algunos modelos devuelven el nombre del
-                # ingrediente en lugar del ID. Lo resolvemos contra el catálogo.
-                if not producto_id:
-                    nombre_ing = ing.get("ingrediente") or ing.get("nombre") or ing.get("ingredient")
-                    if nombre_ing:
-                        objetivo = normalizar_texto(nombre_ing)
-                        for lista in CATALOGOS.values():
-                            for producto_cat in lista:
-                                if normalizar_texto(producto_cat.get("ingrediente_base")) == objetivo:
-                                    producto_id = producto_cat.get("id")
-                                    break
-                            if producto_id:
-                                break
 
                 cantidad = (
                     ing.get("cantidad_por_persona")
@@ -1525,10 +1479,8 @@ def validar_plan_completo(plan, dias_solicitados, comidas_solicitadas, catalogo)
             ingredientes = comida.get("ingredientes", [])
             if len(ingredientes) < 2:
                 return False, f"Una comida del día {i} tiene menos de 2 ingredientes."
-            # No existe máximo de ingredientes ni pasos: la calidad de la receta
-            # manda. Solo verificamos que exista una preparación utilizable.
             if len(comida.get("preparacion", [])) < 2:
-                return False, f"Una comida del día {i} tiene una preparación insuficiente."
+                return False, f"Una comida del día {i} tiene menos de 2 pasos."
             for ing in ingredientes:
                 if ing.get("producto_id") not in ids_validos:
                     return False, f"Hay un producto_id inválido en el día {i}."
@@ -1542,17 +1494,20 @@ def validar_plan_completo(plan, dias_solicitados, comidas_solicitadas, catalogo)
 
 
 def construir_prompt_reintento(plan, dias, comidas, catalogo, motivo):
-    # La corrección nunca debe empobrecer las recetas. No imponemos límite de
-    # ingredientes ni de pasos: solo exigimos que sean válidos y completos.
     ids = ",".join(p["id"] for p in catalogo)
     plan_compacto = json.dumps(plan, ensure_ascii=False, separators=(",", ":"))
-    comidas_texto = ",".join(comidas)
-    return f"""Corrige el plan de KashCook. Motivo de validación: {motivo}
+    comidas_texto = ", ".join(comidas)
+    return f"""Corrige este plan KashCook. Motivo: {motivo}
 
-Conserva EXACTAMENTE {dias} días y las comidas {comidas_texto}. Mantén o mejora la calidad culinaria. NO reduzcas artificialmente ingredientes ni pasos. Cada platillo puede tener tantos ingredientes y pasos como necesite una receta completa. Usa solo estos IDs cuando puedas: {ids}
-Si recibes ingredientes por nombre, usa nombres claros y reales del catálogo.
-Devuelve SOLO JSON válido, sin Markdown.
-PLAN:{plan_compacto}"""
+Debe tener EXACTAMENTE {dias} días y cada día EXACTAMENTE estas comidas: {comidas_texto}. Cada comida: nombre, mínimo 2 ingredientes, mínimo 2 pasos. Cada ingrediente: producto_id válido, cantidad_por_persona > 0 y unidad compatible. Conserva el contenido útil del plan. Responde SOLO JSON.
+
+IDs válidos:
+{ids}
+
+PLAN:
+{plan_compacto}
+
+Estructura: {{"dias":[{{"dia":1,"comidas":[{{"tipo":"Desayuno","nombre":"...","ingredientes":[{{"producto_id":"ID","cantidad_por_persona":2,"unidad":"pieza"}}],"preparacion":["Paso 1","Paso 2"]}}]}}]}}"""
 
 
 # ============================================================
@@ -1744,12 +1699,11 @@ def calcular_compra(
         if paquetes < 1:
             paquetes = 1
 
-        precio = p.get("precio")
-        if precio is None:
-            subtotal = None
-        else:
-            subtotal = paquetes * float(precio)
-            total += subtotal
+        subtotal = (
+            paquetes * p["precio"]
+        )
+
+        total += subtotal
 
         compra.append(
             {
@@ -1773,7 +1727,9 @@ def calcular_compra(
                     "unidad"
                 ],
                 "paquetes": paquetes,
-                "precio_unitario": precio,
+                "precio_unitario": p[
+                    "precio"
+                ],
                 "subtotal": subtotal,
                 "tienda": p[
                     "tienda"
@@ -1792,61 +1748,58 @@ def calcular_compra(
 # ============================================================
 
 def construir_prompt(
-    tiendas, dias, personas, presupuesto, estilos, comidas,
-    electrodomesticos, restricciones, catalogo,
+    tiendas,
+    dias,
+    personas,
+    presupuesto,
+    estilos,
+    comidas,
+    electrodomesticos,
+    restricciones,
+    catalogo,
 ):
-    """Construye un prompt culinario rico pero compacto.
 
-    La IA diseña recetas; el motor local calcula cantidades, presentaciones
-    y costos. No se limita artificialmente el número de ingredientes.
-    """
-    # Para reducir TPM, enviamos un índice de ingredientes/IDs en vez de
-    # descripciones largas y repetitivas de cada producto.
-    indice = {}
+    # Formato compacto: conserva todos los productos y datos que la IA
+    # necesita, pero evita repetir claves JSON y textos largos.
+    catalogo_lineas = []
     for p in catalogo:
-        base = str(p.get("ingrediente_base", "")).strip()
-        if base:
-            indice.setdefault(base, []).append(p["id"])
+        catalogo_lineas.append(
+            f"{p['id']}|{p['tienda']}|{p['ingrediente_base']}|"
+            f"{p['nombre']}|{p['contenido']}{p['unidad_contenido']}|"
+            f"{p['precio']}"
+        )
 
-    catalogo_lineas = [
-        f"{base}:{'/'.join(ids[:4])}"
-        for base, ids in sorted(indice.items())
-    ]
+    comidas_texto = ", ".join(comidas)
+    estilos_texto = ", ".join(estilos) if estilos else "Libre"
+    electro_texto = ", ".join(electrodomesticos) if electrodomesticos else "Cocina convencional"
+    restr_texto = restricciones.strip() if restricciones else "Ninguna"
 
-    comidas_texto = ",".join(comidas)
-    estilos_texto = ",".join(estilos) if estilos else "Libre"
-    electro_texto = ",".join(electrodomesticos) if electrodomesticos else "Cocina convencional"
-    restr_texto = (restricciones or "Ninguna").strip()[:900]
+    return f"""Eres KashCook AI. Crea un plan de alimentación para {personas} personas durante EXACTAMENTE {dias} días.
 
-    return f"""Eres KashCook AI, chef y planificador culinario profesional.
-Crea EXACTAMENTE {dias} días para {personas} personas.
+Presupuesto: ${presupuesto:.2f} MXN. Límite absoluto: ${presupuesto + TOLERANCIA_PRESUPUESTO:.2f}.
+Tiendas permitidas: {', '.join(tiendas)}. NO compares precios ni recomiendes una tienda por precio.
+Estilos: {estilos_texto}. Comidas obligatorias cada día: {comidas_texto}.
+Electrodomésticos: {electro_texto}. Restricciones/alergias: {restr_texto}.
 
-COMIDAS: {comidas_texto}
-ESTILOS: {estilos_texto}
-EQUIPO DISPONIBLE: {electro_texto}
-RESTRICCIONES/ALERGIAS: {restr_texto}
-PRESUPUESTO: ${presupuesto:.0f} MXN. No inventes precios ni hagas cálculos de costo.
+REGLAS:
+- Usa SOLO productos del catálogo y SOLO tiendas permitidas.
+- Las cantidades son POR PERSONA; el sistema las multiplicará por {personas}.
+- Porciones principales orientativas: pollo sin hueso 180-220 g; pollo con hueso 250-350 g; res/cerdo 160-220 g; pescado 180-220 g; huevo 2-4 piezas. Atún y sardina: porción realista.
+- Varía proteínas: pollo, res, cerdo, pescado, atún, sardina y huevo cuando sea compatible con días, comidas y restricciones. No hagas todo a base de pollo.
+- Varía recetas y usa acompañamientos/verduras adecuados.
+- No inventes productos ni precios.
+- Objetivo: usar aproximadamente 90-100% del presupuesto cuando sea posible. Puede quedar por debajo; nunca superes el límite absoluto.
+- Cada día debe contener EXACTAMENTE las comidas solicitadas, sin omitir ninguna.
+- Cada comida necesita nombre, al menos 2 ingredientes y al menos 2 pasos de preparación.
+- Cada ingrediente necesita producto_id EXACTO del catálogo, cantidad_por_persona numérica y unidad compatible.
 
-CALIDAD CULINARIA OBLIGATORIA:
-- Los platillos deben ser completos, apetitosos y variados; evita recetas pobres o de 2-3 ingredientes salvo que el platillo realmente lo justifique.
-- NO existe límite de ingredientes. Usa todos los ingredientes necesarios para una receta bien hecha: proteína, verduras, base, guarnición, salsa/adobo, especias, aromáticos y complementos cuando correspondan.
-- NO existe límite artificial de pasos. Explica la preparación completa, normalmente en 4-10 pasos cuando el platillo lo requiera.
-- Incluye guarniciones y componentes que formen parte natural del platillo.
-- Alterna pollo, res, cerdo, pescado, atún, sardina, huevo y opciones económicas según estilos y disponibilidad. No repitas la misma proteína de forma monótona.
-- Respeta los electrodomésticos disponibles y las restricciones.
-- Usa cantidades por persona y unidades culinarias claras: g, ml, pieza, diente, etc.
-- Nunca uses la palabra "Almuerzo".
-- No agregues ni elimines días o comidas.
-
-ÍNDICE DE INGREDIENTES DISPONIBLES (ingrediente_base: IDs de producto):
+CATÁLOGO (id|tienda|ingrediente|producto|contenido|precio):
 {chr(10).join(catalogo_lineas)}
 
-Para cada ingrediente, intenta usar un ID del índice. Si no es posible, usa el nombre exacto del ingrediente_base y KashCook lo resolverá localmente.
+RESPONDE SOLO CON JSON con esta forma:
+{{"dias":[{{"dia":1,"comidas":[{{"tipo":"Desayuno","nombre":"...","ingredientes":[{{"producto_id":"ID","cantidad_por_persona":200,"unidad":"g"}}],"preparacion":["Paso 1","Paso 2"]}}]}}]}}
 
-FORMATO JSON ÚNICO:
-{{"dias":[{{"dia":1,"comidas":[{{"tipo":"Comida","nombre":"Platillo completo","ingredientes":[{{"ingrediente":"pollo","cantidad_por_persona":180,"unidad":"g"}},{{"ingrediente":"tomate","cantidad_por_persona":0.5,"unidad":"pieza"}}],"preparacion":["Paso 1","Paso 2","Paso 3"]}}]}}]}}
-
-Devuelve SOLO el objeto JSON. Exactamente {dias} días y exactamente estas comidas: {comidas_texto}."""
+Debes entregar EXACTAMENTE {dias} días y en cada día EXACTAMENTE: {comidas_texto}. Verifica esto antes de responder."""
 
 
 # ============================================================
@@ -1854,18 +1807,53 @@ Devuelve SOLO el objeto JSON. Exactamente {dias} días y exactamente estas comid
 # ============================================================
 
 
-def construir_prompt_ajuste(plan, compra, total, presupuesto, personas, catalogo, modo):
-    ids = ",".join(p["id"] for p in catalogo)
+def construir_prompt_ajuste(
+    plan,
+    compra,
+    total,
+    presupuesto,
+    personas,
+    catalogo,
+    modo,
+):
+
+    catalogo_lineas = []
+    for p in catalogo:
+        catalogo_lineas.append(
+            f"{p['id']}|{p['tienda']}|{p['ingrediente_base']}|"
+            f"{p['nombre']}|{p['contenido']}{p['unidad_contenido']}|{p['precio']}"
+        )
+
     plan_compacto = json.dumps(plan, ensure_ascii=False, separators=(",", ":"))
+
     if modo == "subir":
-        objetivo = f"Sube moderadamente el costo hacia ${presupuesto:.0f}, sin superar ${presupuesto + TOLERANCIA_PRESUPUESTO:.0f}."
+        objetivo = (
+            f"El total actual es ${total:.2f}. Está por debajo del objetivo. "
+            f"Mejora cantidades/acompañamientos/variedad para acercarte a "
+            f"${presupuesto:.2f}, sin superar ${presupuesto + TOLERANCIA_PRESUPUESTO:.2f}."
+        )
     else:
-        objetivo = f"Baja el costo a máximo ${presupuesto + TOLERANCIA_PRESUPUESTO:.0f}, conservando comidas y porciones razonables."
-    return f"""Ajusta este plan. {objetivo}
-Conserva EXACTAMENTE días, comidas, calidad culinaria y porciones razonables. NO reduzcas artificialmente ingredientes ni pasos. Puedes sustituir ingredientes/platillos cuando sea necesario para el presupuesto. Usa SOLO IDs válidos cuando los uses. No escribas explicaciones.
-IDs:{ids}
-PLAN:{plan_compacto}
-Devuelve SOLO JSON válido con la misma estructura."""
+        objetivo = (
+            f"El total actual es ${total:.2f}. Debes reducirlo a máximo "
+            f"${presupuesto + TOLERANCIA_PRESUPUESTO:.2f}, manteniendo porciones reales "
+            f"para {personas} personas y sin eliminar proteínas de forma absurda."
+        )
+
+    return f"""Eres KashCook AI y debes AJUSTAR un plan existente.
+{objetivo}
+
+Conserva EXACTAMENTE la estructura actual de días y tipos de comida. No omitas ni agregues días o comidas. Las cantidades siguen siendo por persona. Usa SOLO IDs del catálogo. NO compares tiendas.
+
+CATÁLOGO id|tienda|ingrediente|producto|contenido|precio:
+{chr(10).join(catalogo_lineas)}
+
+PLAN ACTUAL:
+{plan_compacto}
+
+COMPRA ACTUAL:
+{json.dumps(compra, ensure_ascii=False, separators=(",", ":"))}
+
+Devuelve SOLO JSON válido en la misma estructura del plan. Cada comida debe conservar nombre, al menos 2 ingredientes y al menos 2 pasos."""
 
 
 # ============================================================
@@ -2073,7 +2061,7 @@ def generar_pdf(
                         f"{cantidad} "
                         f"{html.escape(str(unidad))} "
                         f"por persona",
-                        texto_pequeno,
+                        pequeno,
                     )
                 )
 
@@ -2112,7 +2100,7 @@ def generar_pdf(
                     Paragraph(
                         f"{numero}. "
                         f"{html.escape(str(paso))}",
-                        texto_pequeno,
+                        pequeno,
                     )
                 )
 
@@ -2365,556 +2353,348 @@ def generar_pdf(
     return buffer.getvalue()
 
 
+
 # ============================================================
-# GENERACIÓN POR BLOQUES — EVITA RESPUESTAS JSON TRUNCADAS
+# MOTOR DE RECETAS REALES Y PLANIFICACIÓN LOCAL
 # ============================================================
+# KashCook NO inventa nombres de platillos. El catálogo siguiente contiene
+# platillos tradicionales/documentados; la IA, si está disponible, solo puede
+# escoger IDs de esta biblioteca. Ingredientes, cantidades y preparación son
+# definidos localmente y después se enlazan con productos reales del catálogo.
 
-def _indice_ingredientes(catalogo):
-    indice = {}
-    for p in catalogo:
-        base = normalizar_texto(p.get("ingrediente_base", ""))
-        if base:
-            indice.setdefault(base, []).append(p["id"])
-    return indice
+RECETAS_REALES = {
+    # ---------------- DESAYUNOS ----------------
+    "huevos_mexicana": {"tipo":"Desayuno","nombre":"Huevos a la mexicana","fuente":"Recetas mexicanas tradicionales","ingredientes":[("huevo",2,"pieza"),("tomate",0.10,"kg"),("cebolla",0.03,"kg"),("tortilla",0.12,"kg"),("aceite",10,"ml")],"pasos":["Pica el tomate y la cebolla. Sofríe la cebolla en el aceite hasta que esté transparente.","Agrega el tomate y cocina hasta que se suavice y forme una salsa rústica.","Añade los huevos batidos, sazona y cocina moviendo hasta que queden cuajados pero jugosos.","Calienta las tortillas y sirve los huevos recién hechos."]},
+    "huevos_rancheros": {"tipo":"Desayuno","nombre":"Huevos rancheros","fuente":"Recetas Nestlé México","ingredientes":[("huevo",2,"pieza"),("tomate",0.12,"kg"),("cebolla",0.03,"kg"),("tortilla",0.12,"kg"),("aceite",10,"ml")],"pasos":["Asa o sofríe ligeramente el tomate y la cebolla; licúa o machaca hasta obtener una salsa rústica.","Calienta la salsa unos minutos hasta que tome cuerpo y rectifica la sal.","Fríe o cocina los huevos al punto deseado.","Sirve los huevos bañados con salsa y acompaña con tortillas calientes."]},
+    "papas_huevo": {"tipo":"Desayuno","nombre":"Papas con huevo a la mexicana","fuente":"Cocina mexicana tradicional","ingredientes":[("huevo",2,"pieza"),("papa",0.18,"kg"),("tomate",0.06,"kg"),("cebolla",0.03,"kg"),("tortilla",0.10,"kg"),("aceite",12,"ml")],"pasos":["Corta la papa en cubos pequeños y cocínala en sartén con aceite hasta que esté dorada y tierna.","Agrega cebolla y tomate picados y cocina hasta que las verduras estén suaves.","Incorpora los huevos batidos, sazona y remueve hasta que cuajen.","Sirve caliente con tortillas."]},
+    "frijoles_huevo": {"tipo":"Desayuno","nombre":"Huevos con frijoles de la olla","fuente":"Cocina mexicana tradicional","ingredientes":[("huevo",2,"pieza"),("frijol",0.12,"kg"),("tomate",0.05,"kg"),("cebolla",0.02,"kg"),("tortilla",0.10,"kg"),("aceite",10,"ml")],"pasos":["Calienta los frijoles con un poco de su caldo hasta que estén bien calientes.","Sofríe cebolla y tomate picados y agrega los huevos batidos.","Cocina hasta que el huevo esté cuajado y sazona al gusto.","Sirve los huevos con frijoles y tortillas calientes."]},
+    "quesadillas_calabacita": {"tipo":"Desayuno","nombre":"Quesadillas de calabacita y queso","fuente":"Cocina mexicana tradicional","ingredientes":[("tortilla",0.15,"kg"),("queso",0.06,"kg"),("calabaza",0.15,"kg"),("cebolla",0.02,"kg"),("tomate",0.05,"kg"),("aceite",8,"ml")],"pasos":["Saltea la calabacita y la cebolla picadas hasta que estén tiernas.","Calienta las tortillas y reparte calabacita y queso en cada una.","Dobla las tortillas y cocina por ambos lados hasta que el queso se funda y la tortilla quede ligeramente dorada.","Acompaña con tomate picado o una salsa de tomate casera."]},
+    "enfrijoladas_queso": {"tipo":"Desayuno","nombre":"Enfrijoladas de queso fresco","fuente":"Cocina mexicana tradicional","ingredientes":[("tortilla",0.18,"kg"),("frijol",0.10,"kg"),("queso",0.05,"kg"),("cebolla",0.02,"kg"),("aceite",8,"ml")],"pasos":["Calienta los frijoles con un poco de agua y licúalos o machácalos hasta obtener una salsa espesa.","Calienta la salsa de frijol y ajusta su consistencia para que cubra las tortillas.","Pasa cada tortilla por la salsa caliente, dóblala y rellénala con queso fresco.","Sirve varias enfrijoladas juntas y termina con cebolla picada y queso."]},
+    "arroz_huevo": {"tipo":"Desayuno","nombre":"Arroz con huevo a la mexicana","fuente":"Cocina mexicana casera","ingredientes":[("arroz",0.08,"kg"),("huevo",2,"pieza"),("tomate",0.08,"kg"),("cebolla",0.03,"kg"),("aceite",10,"ml")],"pasos":["Calienta el arroz cocido o prepáralo previamente hasta que quede suelto.","Sofríe cebolla y tomate picados en un poco de aceite.","Agrega el arroz y mezcla para que tome sabor.","Incorpora los huevos batidos y cocina hasta que estén completamente cuajados. Sirve caliente."]},
+    "tortitas_papa": {"tipo":"Desayuno","nombre":"Tortitas de papa con queso","fuente":"Recetas mexicanas caseras","ingredientes":[("papa",0.22,"kg"),("queso",0.05,"kg"),("huevo",1,"pieza"),("cebolla",0.02,"kg"),("aceite",12,"ml"),("tortilla",0.08,"kg")],"pasos":["Cuece la papa hasta que esté suave, escúrrela y machácala.","Mezcla la papa con queso, cebolla picada y huevo hasta obtener una masa manejable.","Forma tortitas y dóralas en una sartén con poco aceite por ambos lados.","Sirve calientes con tortillas."]},
 
+    # ---------------- COMIDAS / CENAS ----------------
+    "picadillo": {"tipo":"Comida","nombre":"Picadillo de res a la mexicana","fuente":"Recetas Nestlé México / Kiwilimón","ingredientes":[("molida",0.16,"kg"),("papa",0.18,"kg"),("zanahoria",0.10,"kg"),("tomate",0.14,"kg"),("cebolla",0.04,"kg"),("aceite",12,"ml"),("arroz",0.08,"kg")],"pasos":["Sofríe la cebolla y agrega la carne molida; cocina hasta que cambie completamente de color.","Añade papa y zanahoria en cubos pequeños y cocina unos minutos.","Licúa o machaca el tomate con un poco de agua, incorpora la salsa y sazona.","Tapa y cocina hasta que las verduras estén tiernas y el guiso haya espesado.","Sirve con arroz blanco."]},
+    "bistec_ranchero": {"tipo":"Comida","nombre":"Bistec ranchero","fuente":"Recetas Nestlé México","ingredientes":[("res",0.18,"kg"),("papa",0.15,"kg"),("tomate",0.14,"kg"),("cebolla",0.04,"kg"),("aceite",12,"ml"),("tortilla",0.10,"kg")],"pasos":["Corta el bistec en tiras o cubos y dóralo en una sartén caliente con un poco de aceite.","Agrega cebolla y papa en cubos y cocina hasta que comiencen a dorarse.","Incorpora el tomate picado y un poco de agua; cocina hasta formar una salsa ligera.","Rectifica la sazón y sirve caliente con tortillas."]},
+    "bistec_cebollado": {"tipo":"Comida","nombre":"Bistec encebollado","fuente":"Kiwilimón","ingredientes":[("res",0.18,"kg"),("cebolla",0.10,"kg"),("tomate",0.06,"kg"),("aceite",12,"ml"),("tortilla",0.10,"kg"),("frijol",0.10,"kg")],"pasos":["Corta la carne en tiras y sazona.","Sella la carne en una sartén caliente con poco aceite.","Agrega abundante cebolla fileteada y tomate; cocina hasta que la cebolla quede suave y ligeramente dorada.","Sirve con frijoles y tortillas calientes."]},
+    "carne_papas": {"tipo":"Comida","nombre":"Carne de res con papas en salsa de tomate","fuente":"Cocina mexicana casera","ingredientes":[("res",0.17,"kg"),("papa",0.20,"kg"),("tomate",0.15,"kg"),("cebolla",0.04,"kg"),("zanahoria",0.08,"kg"),("aceite",12,"ml"),("arroz",0.08,"kg")],"pasos":["Dora la carne en una olla con un poco de aceite.","Agrega cebolla, papa y zanahoria en cubos y sofríe unos minutos.","Incorpora el tomate licuado o machacado con agua y sazona.","Tapa y cocina hasta que la carne y las verduras estén tiernas.","Sirve con arroz blanco."]},
+    "pollo_salsa_roja": {"tipo":"Comida","nombre":"Pollo en salsa de tomate","fuente":"Cocina mexicana casera","ingredientes":[("pollo",0.20,"kg"),("tomate",0.16,"kg"),("cebolla",0.04,"kg"),("papa",0.12,"kg"),("aceite",12,"ml"),("arroz",0.08,"kg")],"pasos":["Dora las piezas o trozos de pollo en una olla con poco aceite.","Agrega cebolla y papa en cubos y cocina unos minutos.","Licúa o machaca el tomate con agua, viértelo sobre el pollo y sazona.","Tapa y cocina hasta que el pollo esté bien cocido y la salsa espese.","Acompaña con arroz blanco."]},
+    "pollo_mexicana": {"tipo":"Comida","nombre":"Pollo a la mexicana","fuente":"Cocina mexicana tradicional","ingredientes":[("pollo",0.20,"kg"),("tomate",0.14,"kg"),("cebolla",0.04,"kg"),("papa",0.10,"kg"),("zanahoria",0.08,"kg"),("aceite",12,"ml"),("tortilla",0.10,"kg")],"pasos":["Corta el pollo en trozos y dóralo en sartén.","Agrega cebolla, tomate, papa y zanahoria en cubos.","Cocina tapado con un poco de agua hasta que las verduras estén tiernas y el pollo completamente cocido.","Rectifica la sazón y sirve con tortillas calientes."]},
+    "pollo_entomatado": {"tipo":"Cena","nombre":"Pollo entomatado con arroz","fuente":"Cocina mexicana casera","ingredientes":[("pollo",0.18,"kg"),("tomate",0.16,"kg"),("cebolla",0.04,"kg"),("arroz",0.08,"kg"),("aceite",10,"ml"),("zanahoria",0.08,"kg")],"pasos":["Dora el pollo con un poco de aceite.","Añade cebolla y tomate picados y cocina hasta que el tomate se deshaga.","Agrega un poco de agua, sazona y cocina tapado hasta que el pollo esté bien cocido.","Sirve con arroz blanco y zanahoria cocida o salteada."]},
+    "cerdo_salsa_tomate": {"tipo":"Comida","nombre":"Cerdo en salsa de tomate","fuente":"Cocina mexicana casera","ingredientes":[("puerco",0.18,"kg"),("tomate",0.16,"kg"),("cebolla",0.04,"kg"),("papa",0.14,"kg"),("aceite",12,"ml"),("arroz",0.08,"kg")],"pasos":["Dora el cerdo en una olla con poco aceite.","Añade cebolla y papa en cubos y cocina unos minutos.","Agrega tomate licuado o machacado con agua y sazona.","Tapa y cocina hasta que el cerdo esté completamente cocido y la salsa espesa.","Sirve con arroz."]},
+    "cerdo_papas": {"tipo":"Comida","nombre":"Cerdo con papas a la mexicana","fuente":"Cocina mexicana casera","ingredientes":[("puerco",0.18,"kg"),("papa",0.20,"kg"),("tomate",0.12,"kg"),("cebolla",0.04,"kg"),("zanahoria",0.08,"kg"),("aceite",12,"ml"),("tortilla",0.10,"kg")],"pasos":["Dora el cerdo en una sartén amplia.","Añade papa y zanahoria en cubos y cocina hasta que empiecen a dorar.","Incorpora cebolla y tomate picados y agrega un poco de agua.","Tapa y cocina hasta que la carne y las verduras estén tiernas.","Sirve con tortillas calientes."]},
+    "pescado_mexicana": {"tipo":"Comida","nombre":"Pescado a la mexicana","fuente":"Cocina mexicana tradicional","ingredientes":[("pescado",0.20,"kg"),("tomate",0.14,"kg"),("cebolla",0.04,"kg"),("zanahoria",0.08,"kg"),("aceite",12,"ml"),("arroz",0.08,"kg")],"pasos":["Seca y sazona los filetes de pescado.","Sofríe cebolla y tomate picados hasta que estén suaves.","Agrega el pescado y cocina tapado hasta que esté opaco y completamente cocido.","Acompaña con zanahoria y arroz blanco."]},
+    "pescado_tomate": {"tipo":"Cena","nombre":"Filete de pescado en salsa de tomate","fuente":"Cocina casera mexicana","ingredientes":[("pescado",0.20,"kg"),("tomate",0.16,"kg"),("cebolla",0.04,"kg"),("papa",0.12,"kg"),("aceite",12,"ml"),("tortilla",0.10,"kg")],"pasos":["Sella el pescado por ambos lados con poco aceite y retira temporalmente.","Sofríe cebolla y agrega tomate licuado o picado; cocina hasta obtener una salsa.","Incorpora papa previamente cocida en cubos y vuelve a colocar el pescado.","Tapa y cocina unos minutos hasta que el pescado esté completamente cocido. Sirve con tortillas."]},
+    "atun_arroz": {"tipo":"Cena","nombre":"Atún a la mexicana con arroz","fuente":"Cocina mexicana casera","ingredientes":[("atun",0.5,"pieza"),("tomate",0.10,"kg"),("cebolla",0.03,"kg"),("papa",0.12,"kg"),("arroz",0.08,"kg"),("aceite",10,"ml")],"pasos":["Escurre el atún y reserva.","Sofríe cebolla y tomate picados; agrega papa cocida en cubos.","Incorpora el atún y cocina solo unos minutos para integrar sabores.","Sirve con arroz blanco."]},
+    "ensalada_atun_papa": {"tipo":"Cena","nombre":"Ensalada de atún con papa a la mexicana","fuente":"Cocina mexicana casera","ingredientes":[("atun",0.5,"pieza"),("papa",0.16,"kg"),("lechuga",0.08,"pieza"),("tomate",0.08,"kg"),("cebolla",0.03,"kg")],"pasos":["Cuece la papa en cubos hasta que esté tierna y déjala enfriar.","Escurre el atún y mézclalo con tomate y cebolla picados.","Incorpora la papa con cuidado y sazona al gusto.","Sirve sobre lechuga fresca y acompaña con tortillas si se desea." ]},
+    "sardinas_arroz": {"tipo":"Comida","nombre":"Sardinas en tomate con arroz","fuente":"Cocina mexicana casera","ingredientes":[("sardina",0.50,"kg"),("tomate",0.10,"kg"),("cebolla",0.03,"kg"),("arroz",0.08,"kg"),("papa",0.10,"kg")],"pasos":["Prepara arroz blanco y mantenlo caliente.","Sofríe cebolla y agrega tomate picado hasta que se forme una salsa ligera.","Incorpora las sardinas con cuidado para no deshacerlas demasiado y calienta suavemente.","Sirve las sardinas con arroz y papa cocida o dorada."]},
+    "calabacitas_queso": {"tipo":"Cena","nombre":"Calabacitas con queso","fuente":"Recetas Nestlé México","ingredientes":[("calabaza",0.25,"kg"),("queso",0.06,"kg"),("tomate",0.10,"kg"),("cebolla",0.04,"kg"),("papa",0.12,"kg"),("aceite",10,"ml"),("frijol",0.10,"kg")],"pasos":["Sofríe cebolla y tomate picados.","Añade calabacita y papa en cubos; cocina tapado hasta que estén tiernas.","Agrega el queso desmoronado y deja que se caliente sin perder completamente su textura.","Sirve con frijoles calientes."]},
+    "arroz_frijoles": {"tipo":"Cena","nombre":"Arroz con frijoles y queso fresco","fuente":"Cocina mexicana tradicional","ingredientes":[("arroz",0.09,"kg"),("frijol",0.10,"kg"),("queso",0.04,"kg"),("tomate",0.06,"kg"),("cebolla",0.02,"kg"),("aceite",8,"ml")],"pasos":["Prepara el arroz hasta que quede suelto.","Calienta los frijoles y sazónalos; pueden quedar enteros o ligeramente machacados.","Mezcla una parte del arroz con los frijoles o sírvelos por separado.","Termina con queso fresco y tomate y cebolla picados."]},
+    "tacos_papa_queso": {"tipo":"Cena","nombre":"Tacos de papa con queso","fuente":"Cocina mexicana tradicional","ingredientes":[("tortilla",0.18,"kg"),("papa",0.22,"kg"),("queso",0.05,"kg"),("cebolla",0.02,"kg"),("aceite",12,"ml"),("frijol",0.10,"kg")],"pasos":["Cuece las papas y machácalas con cebolla picada.","Calienta las tortillas y rellénalas con papa y queso.","Dobla los tacos y dóralos en una sartén con poco aceite.","Sirve con frijoles calientes."]},
+    "tortitas_papa_comida": {"tipo":"Comida","nombre":"Tortitas de papa con queso y frijoles","fuente":"Cocina mexicana tradicional","ingredientes":[("papa",0.25,"kg"),("queso",0.06,"kg"),("huevo",1,"pieza"),("cebolla",0.03,"kg"),("aceite",12,"ml"),("frijol",0.12,"kg"),("tomate",0.06,"kg")],"pasos":["Cuece y machaca las papas.","Mezcla con huevo, queso y cebolla; forma tortitas.","Dora las tortitas en poco aceite por ambos lados.","Sirve con frijoles y tomate picado."]},
+}
 
-def _resolver_producto_por_nombre(valor, catalogo):
-    objetivo = normalizar_texto(valor or "")
-    if not objetivo:
+DESAYUNOS = [k for k,v in RECETAS_REALES.items() if v["tipo"]=="Desayuno"]
+PLATOS = [k for k,v in RECETAS_REALES.items() if v["tipo"] in ("Comida","Cena")]
+
+def _producto_para_base(base, catalogo):
+    """Selecciona el producto más barato de la tienda seleccionada para un ingrediente."""
+    candidatos=[p for p in catalogo if p.get("ingrediente_base")==base]
+    if base == "molida":
+        candidatos=[p for p in catalogo if p.get("ingrediente_base")=="res" and "molida" in str(p.get("nombre","")).lower()]
+    if not candidatos:
         return None
-
-    # Coincidencia exacta con ingrediente_base.
-    for p in catalogo:
-        if normalizar_texto(p.get("ingrediente_base")) == objetivo:
-            return p["id"]
-
-    # Coincidencia por inclusión controlada.
-    for p in catalogo:
-        base = normalizar_texto(p.get("ingrediente_base"))
-        nombre = normalizar_texto(p.get("nombre"))
-        if objetivo == base or objetivo in base or base in objetivo:
-            return p["id"]
-        if objetivo and objetivo in nombre:
-            return p["id"]
-    return None
+    return min(candidatos,key=lambda p: float(p.get("precio") or 10**9))
 
 
-def _prompt_bloque(tienda_texto, dias_bloque, personas, estilos, comidas,
-                   electrodomesticos, restricciones, catalogo):
-    indice = _indice_ingredientes(catalogo)
-    indice_texto = "\n".join(
-        f"{k}:{'/'.join(v[:3])}" for k, v in sorted(indice.items())
-    )
-    estilos_texto = ",".join(estilos) if estilos else "Libre"
-    equipo = ",".join(electrodomesticos) if electrodomesticos else "Cocina convencional"
-    restricciones = (restricciones or "Ninguna").strip()[:700]
-    comidas_texto = ",".join(comidas)
-    dias_texto = ",".join(str(x) for x in dias_bloque)
-
-    return f"""KashCook AI — bloque de días {dias_texto}.\n\nGenera SOLO los días {dias_texto}, para {personas} personas. Cada día debe contener EXACTAMENTE estas comidas: {comidas_texto}.\nEstilos: {estilos_texto}. Equipo: {equipo}. Restricciones: {restricciones}. Tiendas: {tienda_texto}.\n\nCALIDAD: crea platillos completos y sustanciosos, no recetas básicas. No hay límite de ingredientes ni de pasos. Usa los ingredientes necesarios para que cada receta sea realmente buena: proteína, verduras, aromáticos, salsa/adobo, guarnición y complementos cuando correspondan. Normalmente 6-12 ingredientes y 4-10 pasos son perfectamente válidos, pero no fuerces esos números. Varía proteínas y evita repetir preparaciones.\n\nNunca uses la palabra Almuerzo. Cantidades por persona. Unidades claras. Usa ingredientes del índice cuando existan.\nÍNDICE:\n{indice_texto}\n\nJSON: {{"dias":[{{"dia":{dias_bloque[0]},"comidas":[{{"tipo":"Comida","nombre":"...","ingredientes":[{{"ingrediente":"pollo","cantidad_por_persona":180,"unidad":"g"}}],"preparacion":["...","..."]}}]}}]}}\nDevuelve SOLO JSON válido. No Markdown. No explicaciones."""
+def _receta_a_comida(recipe_id, catalogo, tipo):
+    r=RECETAS_REALES[recipe_id]
+    ingredientes=[]
+    for base,cantidad,unidad in r["ingredientes"]:
+        p=_producto_para_base(base,catalogo)
+        if not p:
+            return None
+        ingredientes.append({"producto_id":p["id"],"cantidad_por_persona":cantidad,"unidad":unidad})
+    return {"tipo":tipo,"nombre":r["nombre"],"ingredientes":ingredientes,"preparacion":r["pasos"],"fuente":r["fuente"]}
 
 
-def _prompt_comida(tienda_texto, dia, personas, tipo_comida, estilos, electrodomesticos, restricciones, catalogo):
-    estilos_texto = ", ".join(estilos) if estilos else "Libre"
-    equipo = ", ".join(electrodomesticos) if electrodomesticos else "Cocina convencional"
-    restricciones = (restricciones or "Ninguna").strip()[:500]
-    # Solo bases de ingredientes: evita mandar el catálogo completo y reduce muchísimo el prompt.
-    indice = _indice_ingredientes(catalogo or [])
-    bases = ", ".join(sorted(indice.keys()))
-    return f"""KashCook AI. Genera SOLO una receta para el DÍA {dia}, comida: {tipo_comida}, para {personas} persona(s).
+def _plan_con_recetas(ids, catalogo, comidas):
+    dias=[]
+    for i,slot in enumerate(ids,1):
+        c=[]
+        for tipo,rid in zip(comidas,slot):
+            comida=_receta_a_comida(rid,catalogo,tipo)
+            if comida is None:
+                return None
+            c.append(comida)
+        dias.append({"dia":i,"comidas":c})
+    return {"dias":dias}
 
-Estilos: {estilos_texto}. Equipo disponible: {equipo}. Restricciones/alergias: {restricciones}. Tiendas seleccionadas: {tienda_texto}.
-Bases de ingredientes disponibles: {bases}
 
-REGLAS CULINARIAS:
-- Crea un platillo completo, abundante y realmente cocinable; NO una receta básica de pocos elementos.
-- No existe límite máximo de ingredientes ni de pasos. Usa todos los que necesite el platillo.
-- Cuando corresponda incluye proteína, verduras, base/guarnición, salsa o adobo, aromáticos y especias.
-- Varía proteínas y preparaciones entre días; evita pollo repetitivo y no repitas el mismo platillo.
-- Desayuno, Comida y Cena deben sentirse como comidas completas, no como una lista de ingredientes.
-- Cantidades por persona y unidades claras.
-- Nunca escribas la palabra Almuerzo.
-- Respeta estrictamente alergias, restricciones y equipo disponible.
+def _costo_plan(plan,catalogo,personas):
+    try:
+        _,total=calcular_compra(plan,catalogo,personas)
+        return total
+    except Exception:
+        return 10**12
 
-Devuelve SOLO JSON válido con exactamente estas claves: tipo, nombre, ingredientes, preparacion.
-ingredientes: lista completa de ingredientes necesarios, sin recortarla.
-preparacion: pasos completos y ordenados, suficientes para cocinar el platillo.
-"""
 
-def _validar_comida_generada(comida, tipo, dia):
-    if not isinstance(comida, dict):
-        raise ValueError(f"{tipo} del día {dia} no devolvió un objeto válido.")
-    if not comida.get("nombre"):
-        raise ValueError(f"{tipo} del día {dia} está incompleta: falta nombre.")
-    ingredientes = comida.get("ingredientes")
-    preparacion = comida.get("preparacion")
-    if not isinstance(ingredientes, list) or len(ingredientes) < 4:
-        raise ValueError(f"{tipo} del día {dia} está incompleta: faltan ingredientes.")
-    if not isinstance(preparacion, list) or len(preparacion) < 3:
-        raise ValueError(f"{tipo} del día {dia} está incompleta: faltan pasos de preparación.")
-    for ing in ingredientes:
-        if not isinstance(ing, dict) or not str(ing.get("ingrediente", "")).strip():
-            raise ValueError(f"{tipo} del día {dia} contiene un ingrediente inválido.")
-        try:
-            if float(ing.get("cantidad_por_persona")) <= 0:
-                raise ValueError
-        except Exception:
-            raise ValueError(f"{tipo} del día {dia} tiene una cantidad inválida.")
-        if not str(ing.get("unidad", "")).strip():
-            raise ValueError(f"{tipo} del día {dia} tiene una unidad inválida.")
-    comida["tipo"] = tipo
-    return comida
-
-def _generar_una_comida(cliente, prompt, tipo, dia, max_intentos=3):
-    ultimo_error = None
-    for intento in range(1, max_intentos + 1):
-        try:
-            extra = ""
-            if intento > 1:
-                extra = f"\nREINTENTO {intento}: corrige la receta anterior. Devuelve la receta COMPLETA de {tipo}; no la resumas, no elimines ingredientes ni pasos y devuelve únicamente JSON válido."
-            respuesta = llamar_groq(
-                cliente,
-                prompt + extra,
-                temperatura=0.25 if intento == 1 else 0.08,
-                max_tokens=2200,
-                schema=_schema_comida(),
-            )
-            obj = extraer_json(respuesta)
-            return _validar_comida_generada(obj, tipo, dia)
-        except Exception as exc:
-            ultimo_error = exc
-    raise ValueError(f"{tipo} del día {dia} no pudo generarse después de {max_intentos} intentos. Último error: {ultimo_error}")
-
-def generar_plan_por_bloques(cliente, dias, personas, estilos, comidas, electrodomesticos, restricciones, catalogo, tiendas):
-    """Genera cada comida como unidad independiente y ensambla localmente.
-
-    Esto evita el problema anterior: una sola respuesta grande podía truncarse justo
-    en el último día/comida. Las comidas de un mismo día se solicitan en paralelo,
-    y si falla una solo se reintenta esa comida.
-    """
-    from concurrent.futures import ThreadPoolExecutor, as_completed
-
-    resultado = {"dias": []}
-    total_dias = int(dias)
-    tienda_texto = ", ".join(tiendas)
-    progreso = st.progress(0, text="👨‍🍳 Preparando tu menú...")
-
-    for dia in range(1, total_dias + 1):
-        tareas = {}
-        with ThreadPoolExecutor(max_workers=min(3, max(1, len(comidas)))) as executor:
+def _generar_plan_local(dias, personas, presupuesto, comidas, catalogo, estilos=None):
+    """Optimización local: no permite que la IA invente platos ni cantidades."""
+    import random
+    candidatos_des=[r for r in DESAYUNOS if _receta_a_comida(r,catalogo,"Desayuno")]
+    candidatos_pl=[r for r in PLATOS if _receta_a_comida(r,"".join([]) if False else catalogo,"Comida")]
+    if not candidatos_des or not candidatos_pl:
+        raise ValueError("No hay suficientes recetas compatibles con los productos de las tiendas seleccionadas.")
+    # Generar candidatos compactos y evaluar el costo real de paquetes.
+    rng=random.Random(20261007 + int(dias)*31 + int(personas)*17 + int(presupuesto))
+    mejor=None
+    mejor_score=-10**18
+    for _ in range(2500):
+        historial=[]; slots=[]
+        for d in range(dias):
+            fila=[]
+            recientes={x for row in historial[-2:] for x in row}
             for tipo in comidas:
-                prompt = _prompt_comida(
-                    tienda_texto, dia, personas, tipo, estilos,
-                    electrodomesticos, restricciones, catalogo
-                )
-                tareas[executor.submit(_generar_una_comida, cliente, prompt, tipo, dia, 3)] = tipo
+                pool=candidatos_des if tipo=="Desayuno" else candidatos_pl
+                disponibles=[x for x in pool if x not in recientes]
+                if len(disponibles)<2: disponibles=pool
+                rid=rng.choice(disponibles)
+                fila.append(rid)
+            slots.append(fila); historial.append(fila)
+        plan=_plan_con_recetas(slots,catalogo,comidas)
+        if not plan: continue
+        nombres=[RECETAS_REALES[r]["nombre"].lower() for row in slots for r in row]
+        tortilla_count=sum(1 for n in nombres if any(x in n for x in ("tortilla","quesadilla","enfrijolada","taco","enchilada")))
+        if tortilla_count > max(5, int(dias*3*0.30)):
+            continue
+        total=_costo_plan(plan,catalogo,personas)
+        limite=presupuesto+TOLERANCIA_PRESUPUESTO
+        if total>limite: continue
+        # Acercarse al presupuesto sin excederlo, penalizando repetición.
+        if total <= presupuesto:
+            score=-(presupuesto-total)
+        else:
+            # Nunca preferir un plan que se pase si existe uno dentro del presupuesto.
+            score=-10000-(total-presupuesto)
+        score += len(set(x for row in slots for x in row))*4
+        if total>=presupuesto*MIN_UTILIZACION_PRESUPUESTO and total<=presupuesto: score+=40
+        if score>mejor_score:
+            mejor_score=score; mejor=(plan,total)
+    if mejor:
+        return mejor
+    # No se permite devolver un plan que exceda el presupuesto.
+    # Si el presupuesto es matemáticamente insuficiente para la combinación
+    # de días/personas y las presentaciones disponibles, se informa en lugar
+    # de falsear el resultado.
+    raise ValueError(
+        f"El presupuesto de ${presupuesto:,.2f} no alcanza para {dias} días y {personas} persona(s) con las presentaciones disponibles. "
+        "KashCook no va a inventar precios ni reducir las porciones a niveles irreales. "
+        "Aumenta el presupuesto, reduce días/personas o cambia la selección de tiendas."
+    )
+    return mejor
 
-            comidas_dia = {}
-            errores = []
-            for futuro in as_completed(tareas):
-                tipo = tareas[futuro]
-                try:
-                    comidas_dia[normalizar_texto(tipo)] = futuro.result()
-                except Exception as exc:
-                    errores.append(str(exc))
 
-        if errores:
-            progreso.empty()
-            raise ValueError(
-                f"No se pudo completar el día {dia}. " + " | ".join(errores)
-            )
+def generar_plan_seguro(dias,personas,presupuesto,comidas,catalogo,estilos=None):
+    plan,total=_generar_plan_local(dias,personas,presupuesto,comidas,catalogo,estilos)
+    valido,motivo=validar_plan_completo(plan,dias,comidas,catalogo)
+    if not valido:
+        raise ValueError(motivo)
+    return plan,total
 
-        ordenadas = []
-        for tipo in comidas:
-            clave = normalizar_texto(tipo)
-            if clave not in comidas_dia:
-                progreso.empty()
-                raise ValueError(f"Falta {tipo} del día {dia}.")
-            ordenadas.append(comidas_dia[clave])
+# ============================================================
+# INTERFAZ
+# ============================================================
 
-        resultado["dias"].append({"dia": dia, "comidas": ordenadas})
-        progreso.progress(dia / total_dias, text=f"👨‍🍳 Día {dia} de {total_dias} listo")
+st.title(
+    "🍳 KashCook AI"
+)
 
-    progreso.empty()
-    plan = normalizar_plan(resultado)
-    ok, motivo = validar_plan_completo(plan, total_dias, comidas, catalogo)
-    if not ok:
-        raise ValueError(f"El plan ensamblado no pasó la validación final: {motivo}")
-    return plan
+st.markdown(
+    """
+### Tu menú, tus compras y tu presupuesto en un solo lugar
 
-def toggle_seleccion(clave, valor):
-    actual = st.session_state.get(clave, [])
-    actual = list(actual)
-    if valor in actual:
-        actual.remove(valor)
-    else:
-        actual.append(valor)
-    st.session_state[clave] = actual
+KashCook crea el menú, calcula las cantidades para el número
+de personas y transforma esas cantidades en productos reales
+según la presentación disponible.
+"""
+)
+
+st.divider()
 
 
 # ============================================================
-# INTERFAZ — KASHCOOK AI MOBILE FIRST
+# TIENDAS
 # ============================================================
 
-st.markdown("""
-<style>
-:root {
-  --kc-lime:#B7E532;
-  --kc-lime-dark:#718d12;
-  --kc-dark:#172019;
-  --kc-cream:#FFF8E8;
-  --kc-coral:#FF7043;
-  --kc-blue:#1769aa;
-  --kc-muted:#4e5a52;
-  --kc-border:#d8dfd2;
-}
+st.subheader(
+    "🛒 ¿Dónde vas a comprar?"
+)
 
-/* ===== FONDO REAL DE LA APP ===== */
-.stApp {
-  background:
-    linear-gradient(rgba(255,250,239,.92),rgba(247,250,242,.96)),
-    url("https://images.unsplash.com/photo-1547592180-85f173990554?auto=format&fit=crop&w=2200&q=85") center top/cover fixed !important;
-  color:#182019 !important;
-}
-[data-testid="stAppViewContainer"] { background:transparent !important; }
-[data-testid="stHeader"] { background:rgba(255,255,255,.72) !important; }
-.block-container { max-width:1180px; padding:1rem 1rem 5rem !important; }
-html, body, [class*="stApp"] { font-size:17px !important; color:#182019 !important; }
+tiendas_seleccionadas = []
 
-/* ===== HERO ===== */
-.kc-hero {
-  position:relative; overflow:hidden;
-  border-radius:30px; padding:34px 28px; margin-bottom:22px;
-  min-height:210px;
-  display:flex; flex-direction:column; justify-content:flex-end;
-  background:
-    linear-gradient(90deg,rgba(17,27,20,.96) 0%,rgba(17,27,20,.78) 48%,rgba(17,27,20,.30) 100%),
-    url("https://images.unsplash.com/photo-1498837167922-ddd27525d352?auto=format&fit=crop&w=1800&q=85") center/cover !important;
-  color:#fff !important; box-shadow:0 14px 40px rgba(23,32,25,.20);
-}
-.kc-hero:after { content:""; position:absolute; inset:0; background:linear-gradient(135deg,rgba(183,229,50,.10),transparent 55%); pointer-events:none; }
-.kc-brand { position:absolute; top:18px; left:22px; z-index:2; display:flex; align-items:center; gap:10px; }
-.kc-brand-mark { width:48px; height:48px; border-radius:15px; background:#B7E532; color:#172019; display:grid; place-items:center; font-size:27px; font-weight:900; box-shadow:0 6px 18px rgba(0,0,0,.18); }
-.kc-brand-name { font-weight:950; font-size:1.05rem; letter-spacing:-.5px; }
-.kc-hero h1 { position:relative; z-index:1; font-size:clamp(2.2rem,6vw,4rem); line-height:.98; margin:0 0 10px; letter-spacing:-2px; color:#fff !important; }
-.kc-hero p { position:relative; z-index:1; font-size:1.08rem; margin:0; color:#fff !important; font-weight:650; text-shadow:0 1px 3px rgba(0,0,0,.45); }
+columnas = st.columns(4)
 
-/* ===== TITULOS / TARJETAS ===== */
-.kc-section { color:#172019 !important; font-size:1.45rem; font-weight:900; margin:28px 0 12px; letter-spacing:-.4px; }
-.kc-card { background:rgba(255,255,255,.97); color:#172019 !important; border:1px solid var(--kc-border); border-radius:22px; padding:19px; box-shadow:0 9px 26px rgba(23,32,25,.09); margin-bottom:15px; }
-.kc-card * { color:inherit; }
-.kc-muted { color:#425048 !important; font-size:.96rem; }
-.kc-price { color:#172019 !important; font-size:1.7rem; font-weight:950; }
-.kc-note { background:#fff5df; color:#3e321d !important; border:1px solid #f2c982; border-radius:17px; padding:14px 16px; font-weight:650; }
-.kc-note * { color:#3e321d !important; }
+for i, tienda in enumerate(
+    TIENDAS_DISPONIBLES
+):
 
-/* ===== LOGOS DE TIENDAS ===== */
-.kc-store-grid { display:grid; grid-template-columns:repeat(5,1fr); gap:10px; }
-.kc-store-logo { background:#fff; border:1px solid #dce3d8; border-radius:18px; min-height:82px; padding:12px 8px; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:6px; box-shadow:0 5px 15px rgba(20,30,20,.06); }
-.kc-store-logo strong { font-size:.92rem; color:#172019 !important; text-align:center; }
-.kc-store-icon { width:38px; height:38px; border-radius:12px; display:grid; place-items:center; font-size:21px; font-weight:950; }
+    with columnas[i]:
 
-/* ===== BOTONES DE SELECCION: SIEMPRE TEXTO LEGIBLE ===== */
-div.stButton > button,
-button[kind="secondary"],
-button[kind="primary"] {
-  min-height:54px !important;
-  width:100% !important;
-  border-radius:17px !important;
-  font-size:16px !important;
-  font-weight:850 !important;
-  letter-spacing:-.1px !important;
-  white-space:normal !important;
-  line-height:1.15 !important;
-  border:2px solid #cfd8ca !important;
-  background:#ffffff !important;
-  color:#172019 !important;
-  -webkit-text-fill-color:#172019 !important;
-  box-shadow:0 4px 13px rgba(20,30,20,.07) !important;
-}
-div.stButton > button p,
-div.stButton > button span,
-div.stButton > button div,
-button[kind="secondary"] p,
-button[kind="secondary"] span,
-button[kind="primary"] p,
-button[kind="primary"] span { color:#172019 !important; -webkit-text-fill-color:#172019 !important; }
-div.stButton > button:hover { background:#f4f9e8 !important; border-color:#8cab25 !important; transform:translateY(-1px); }
-div.stButton > button:focus:not(:active) { background:#eef7d7 !important; color:#172019 !important; }
-/* Seleccionado */
-div.stButton > button[kind="primary"] { background:#B7E532 !important; color:#172019 !important; -webkit-text-fill-color:#172019 !important; border-color:#8eae18 !important; box-shadow:0 5px 16px rgba(113,141,18,.25) !important; }
-div.stButton > button[kind="primary"] p,
-div.stButton > button[kind="primary"] span { color:#172019 !important; -webkit-text-fill-color:#172019 !important; }
+        seleccionada = st.checkbox(
+            tienda,
+            value=(i == 0),
+            key=f"tienda_{i}",
+        )
 
-/* ===== CAMPOS ===== */
-label, [data-testid="stWidgetLabel"] p, [data-testid="stWidgetLabel"] { color:#172019 !important; font-weight:800 !important; }
-[data-baseweb="input"], [data-baseweb="textarea"], [data-baseweb="select"] { background:#fff !important; border-radius:14px !important; }
-[data-testid="stTextInput"] input, [data-testid="stTextArea"] textarea, input, textarea { color:#172019 !important; -webkit-text-fill-color:#172019 !important; font-size:17px !important; background:#fff !important; }
-[data-testid="stMetric"] { background:rgba(255,255,255,.97) !important; color:#172019 !important; border:1px solid #dce3d8; padding:15px; border-radius:18px; }
-[data-testid="stMetric"] * { color:#172019 !important; }
-
-/* ===== RECETAS ===== */
-.kc-recipe { border-left:7px solid var(--kc-lime); background:rgba(255,255,255,.98); color:#172019 !important; border-radius:20px; padding:21px; margin:13px 0; box-shadow:0 8px 24px rgba(23,32,25,.09); }
-.kc-recipe h2 { color:#172019 !important; }
-.kc-recipe strong, .kc-recipe b { color:#172019 !important; }
-.kc-recipe p, .kc-recipe li { color:#26342b !important; font-size:1rem !important; line-height:1.55 !important; }
-.kc-day { background:#172019; color:#fff !important; border-radius:16px; padding:13px 16px; margin-top:24px; font-size:1.2rem; font-weight:900; }
-.kc-pill { display:inline-block; background:#eef6d3; color:#34410c !important; border-radius:999px; padding:7px 11px; margin:3px; font-weight:750; font-size:.92rem; }
-
-/* ===== RESPONSIVE CELULAR ===== */
-@media (max-width:900px) {
-  .kc-store-grid { grid-template-columns:repeat(2,1fr); }
-}
-@media (max-width:700px) {
-  .block-container { padding:.55rem .65rem 3.5rem !important; }
-  .kc-hero { min-height:225px; padding:26px 18px 22px; border-radius:23px; }
-  .kc-brand { top:14px; left:16px; }
-  .kc-brand-mark { width:43px; height:43px; font-size:23px; }
-  .kc-hero h1 { font-size:2.25rem; letter-spacing:-1.3px; }
-  .kc-hero p { font-size:1rem; }
-  .kc-section { font-size:1.28rem; margin-top:23px; }
-  .kc-card, .kc-recipe { padding:15px; border-radius:17px; }
-  div.stButton > button { min-height:58px !important; font-size:16px !important; padding:8px 10px !important; }
-  .kc-store-logo { min-height:76px; }
-  .kc-store-logo strong { font-size:.82rem; }
-  .kc-pill { font-size:.88rem; }
-  .kc-recipe p, .kc-recipe li { font-size:1rem !important; }
-}
-
-.kc-store-logo{height:54px;display:flex;align-items:center;justify-content:center;margin:2px 0 6px;}
-.kc-store-logo img{width:52px;height:52px;object-fit:contain;background:#fff;border-radius:14px;padding:7px;box-shadow:0 5px 16px rgba(0,0,0,.10);}
-[data-testid="stButton"] button{min-height:52px!important;border-radius:16px!important;font-size:16px!important;font-weight:800!important;line-height:1.15!important;}
-[data-testid="stButton"] button[kind="secondary"]{background:#ffffff!important;color:#17201b!important;border:2px solid #d7dfd9!important;}
-[data-testid="stButton"] button[kind="primary"]{background:#b7e23b!important;color:#17201b!important;border:2px solid #8dbb16!important;}
-.kc-card,.kc-note,.kc-section{color:#17201b!important;}
-</style>
-""", unsafe_allow_html=True)
-
-st.markdown("""
-<div class="kc-hero">
-  <div class="kc-brand"><div class="kc-brand-mark">🍳</div><div class="kc-brand-name">KashCook AI</div></div>
-  <h1>KashCook AI</h1>
-  <p>Tu sistema inteligente de planificación culinaria y financiera.</p>
-  <p style="margin-top:8px">Recetas completas · compras · presupuesto · PDF</p>
-</div>
-""", unsafe_allow_html=True)
-
-# Estado persistente para botones de selección.
-st.session_state.setdefault("kc_tiendas", ["Alsuper"])
-st.session_state["kc_tiendas"] = [x for x in st.session_state.get("kc_tiendas", []) if x in ["Alsuper", "Walmart", "Soriana", "Bodega Aurrerá"]]
-st.session_state.setdefault("kc_estilos", ["Mexicana", "Casera", "Económica"])
-st.session_state.setdefault("kc_comidas", ["Desayuno", "Comida", "Cena"])
-st.session_state.setdefault("kc_electro", ["Estufa", "Licuadora"])
-
-
-TIENDA_LOGOS = {
-    "Alsuper": "https://www.google.com/s2/favicons?domain=alsuper.com&sz=128",
-    "Walmart": "https://www.google.com/s2/favicons?domain=walmart.com.mx&sz=128",
-    "Soriana": "https://www.google.com/s2/favicons?domain=soriana.com&sz=128",
-    "Bodega Aurrerá": "https://www.google.com/s2/favicons?domain=bodegaaurrera.com.mx&sz=128",
-}
-
-def selector_botones(titulo, opciones, clave, iconos=None, columnas=2):
-    st.markdown(f'<div class="kc-section">{titulo}</div>', unsafe_allow_html=True)
-    cols = st.columns(columnas)
-    seleccion = st.session_state.get(clave, [])
-    for i, opcion in enumerate(opciones):
-        with cols[i % columnas]:
-            if clave == "kc_tiendas" and opcion in TIENDA_LOGOS:
-                st.markdown(
-                    f'<div class="kc-store-logo"><img src="{TIENDA_LOGOS[opcion]}" alt="{opcion}"></div>',
-                    unsafe_allow_html=True,
-                )
-            pref = (iconos or {}).get(opcion, "")
-            texto = f"{pref} {opcion}".strip()
-            st.button(
-                ("✓  " if opcion in seleccion else "") + texto,
-                key=f"sel_{clave}_{i}",
-                use_container_width=True,
-                type="primary" if opcion in seleccion else "secondary",
-                on_click=toggle_seleccion,
-                args=(clave, opcion),
+        if seleccionada:
+            tiendas_seleccionadas.append(
+                tienda
             )
 
+if not tiendas_seleccionadas:
 
-selector_botones(
-    "🛒 ¿Dónde vas a comprar?",
-    ["Alsuper", "Walmart", "Soriana", "Bodega Aurrerá"],
-    "kc_tiendas",
-    {"Alsuper":"🟢", "Walmart":"🔵", "Soriana":"🔴", "Bodega Aurrerá":"🟠"},
-    columnas=2,
+    st.warning(
+        "Selecciona al menos una tienda."
+    )
+
+    st.stop()
+
+
+# ============================================================
+# DATOS
+# ============================================================
+
+col1, col2, col3 = st.columns(3)
+
+with col1:
+
+    dias = st.number_input(
+        "📅 Días",
+        min_value=1,
+        max_value=7,
+        value=7,
+        step=1,
+    )
+
+with col2:
+
+    personas = st.number_input(
+        "👨‍👩‍👧‍👦 Personas",
+        min_value=1,
+        max_value=10,
+        value=4,
+        step=1,
+    )
+
+with col3:
+
+    presupuesto = st.number_input(
+        "💰 Presupuesto total",
+        min_value=200,
+        max_value=10000,
+        value=1500,
+        step=100,
+    )
+
+
+# ============================================================
+# ESTILOS
+# ============================================================
+
+st.subheader(
+    "🍽️ Estilo de comida"
 )
 
-tienda_info = st.session_state["kc_tiendas"]
-if not tienda_info:
-    st.error("Selecciona al menos una tienda.")
-
-st.markdown('<div class="kc-section">⚙️ Configura tu plan</div>', unsafe_allow_html=True)
-c1, c2, c3 = st.columns(3)
-with c1:
-    dias = st.number_input("📅 Días", min_value=1, max_value=7, value=7, step=1, key="kc_dias")
-with c2:
-    personas = st.number_input("👨‍👩‍👧‍👦 Personas", min_value=1, max_value=10, value=4, step=1, key="kc_personas")
-with c3:
-    presupuesto = st.number_input("💰 Presupuesto (MXN)", min_value=200, max_value=10000, value=1500, step=100, key="kc_presupuesto")
-
-selector_botones(
-    "🍽️ Estilo de comida",
-    ["Mexicana", "Casera", "Saludable", "Económica", "Alta en proteína", "Baja en carbohidratos", "Italiana", "Mediterránea", "Desayunos mexicanos", "Comida rápida casera", "Regional Norteña", "Asiática", "Fitness"],
-    "kc_estilos",
-    columnas=2,
+estilos = st.multiselect(
+    "Selecciona uno o varios estilos",
+    [
+        "Mexicana",
+        "Casera",
+        "Saludable",
+        "Económica",
+        "Alta en proteína",
+        "Baja en carbohidratos",
+        "Italiana",
+        "Mediterránea",
+        "Desayunos mexicanos",
+        "Comida rápida casera",
+    ],
+    default=[
+        "Mexicana",
+        "Casera",
+        "Económica",
+    ],
 )
 
-selector_botones(
-    "🍳 ¿Qué comidas quieres planear?",
-    ["Desayuno", "Comida", "Cena"],
-    "kc_comidas",
-    columnas=3,
+
+# ============================================================
+# COMIDAS
+# ============================================================
+
+st.subheader(
+    "🍳 ¿Qué comidas quieres planear?"
 )
 
-selector_botones(
-    "🔌 Electrodomésticos disponibles",
-    ["Estufa", "Horno", "Microondas", "Air Fryer", "Licuadora", "Freidora", "Olla de presión", "Olla lenta", "Parrilla eléctrica"],
-    "kc_electro",
-    columnas=2,
+comidas = st.multiselect(
+    "Selecciona las comidas",
+    [
+        "Desayuno",
+        "Comida",
+        "Cena",
+    ],
+    default=[
+        "Desayuno",
+        "Comida",
+        "Cena",
+    ],
 )
 
-st.markdown('<div class="kc-section">⚠️ Restricciones y alergias</div>', unsafe_allow_html=True)
+
+# ============================================================
+# ELECTRODOMÉSTICOS
+# ============================================================
+
+st.subheader(
+    "🔌 Electrodomésticos disponibles"
+)
+
+electrodomesticos = st.multiselect(
+    "Selecciona los que tienes",
+    [
+        "Estufa",
+        "Horno",
+        "Microondas",
+        "Air Fryer",
+        "Licuadora",
+        "Freidora",
+        "Olla de presión",
+        "Olla lenta",
+        "Parrilla eléctrica",
+    ],
+    default=[
+        "Estufa",
+        "Licuadora",
+    ],
+)
+
+
+# ============================================================
+# RESTRICCIONES
+# ============================================================
+
+st.subheader(
+    "⚠️ Restricciones y alergias"
+)
+
 restricciones = st.text_area(
-    "",
-    placeholder="Ejemplo: sin camarón, sin cacahuate, no picante, vegetariano...",
-    key="kc_restricciones",
-    label_visibility="collapsed",
+    "Indica alergias, alimentos que no consumen "
+    "o restricciones",
+    placeholder=(
+        "Ejemplo: sin camarón, sin cacahuate, "
+        "no picante, vegetariano..."
+    ),
 )
 
-st.markdown('<div class="kc-card"><b>🍴 Importante:</b> KashCook no limita artificialmente tus recetas. Un platillo puede tener 5, 8, 12 o más ingredientes y todos los pasos necesarios para que sea realmente completo.</div>', unsafe_allow_html=True)
 
-if not st.session_state["kc_comidas"]:
-    st.warning("Selecciona al menos una comida.")
-if not st.session_state["kc_tiendas"]:
-    st.warning("Selecciona al menos una tienda.")
-
-st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
-
-if st.button("🚀 GENERAR MI PLAN", type="primary", use_container_width=True, key="generar_plan_kc"):
-    comidas = st.session_state["kc_comidas"]
-    tiendas_seleccionadas = st.session_state["kc_tiendas"]
-    estilos = st.session_state["kc_estilos"]
-    electrodomesticos = st.session_state["kc_electro"]
-
-    if not comidas or not tiendas_seleccionadas:
-        st.error("Selecciona al menos una comida y una tienda.")
-        st.stop()
-
-    cliente = obtener_cliente_groq()
-    if not cliente:
-        st.error("Configura GROQ_API_KEY para continuar.")
-        st.stop()
-
-    catalogo = []
-    for tienda in tiendas_seleccionadas:
-        catalogo.extend(CATALOGOS.get(tienda, []))
-    if not catalogo:
-        st.error("No hay productos disponibles para las tiendas seleccionadas.")
-        st.stop()
-
-    with st.spinner("👨‍🍳 KashCook está preparando recetas completas..."):
-        try:
-            plan = generar_plan_por_bloques(
-                cliente, dias, personas, estilos, comidas,
-                electrodomesticos, restricciones, catalogo, tiendas_seleccionadas
-            )
-
-            valido, motivo = validar_plan_completo(plan, dias, comidas, catalogo)
-            if not valido:
-                raise ValueError(f"El plan ensamblado no pasó la validación: {motivo}")
-
-            compra, total = calcular_compra(plan, catalogo, personas)
-
-            # No hacemos una segunda generación completa para ajustar presupuesto:
-            # evita otra salida JSON gigante y mantiene tiempos predecibles.
-            if total > presupuesto + TOLERANCIA_PRESUPUESTO:
-                st.warning(f"El menú calculado queda ${total:,.2f} MXN, por encima del presupuesto de ${presupuesto:,.2f}.")
-            elif total < presupuesto * MIN_UTILIZACION_PRESUPUESTO and presupuesto >= 500:
-                st.info(f"El menú utiliza ${total:,.2f} MXN de un presupuesto de ${presupuesto:,.2f}; no se fuerzan compras innecesarias.")
-
-            st.session_state.update({
-                "plan": plan,
-                "compra": compra,
-                "total": total,
-                "presupuesto": presupuesto,
-                "personas": personas,
-                "tiendas": tiendas_seleccionadas,
-            })
-            st.success("✅ Plan generado correctamente.")
-        except Exception as e:
-            st.error(f"No se pudo generar el plan: {e}")
-
-
-# ============================================================
-# RESULTADOS
-# ============================================================
-if "plan" in st.session_state:
-    plan = st.session_state["plan"]
-    compra = st.session_state["compra"]
-    total = st.session_state["total"]
-    presupuesto_resultado = st.session_state["presupuesto"]
-    personas_resultado = st.session_state["personas"]
-    tiendas_resultado = st.session_state["tiendas"]
-
-    st.markdown('<div class="kc-section">📊 Resumen del plan</div>', unsafe_allow_html=True)
-    a, b, c = st.columns(3)
-    with a: st.metric("💰 Presupuesto", f"${presupuesto_resultado:,.0f}")
-    with b: st.metric("🛒 Compra", f"${total:,.2f}")
-    with c: st.metric("💵 Disponible", f"${presupuesto_resultado-total:,.2f}" if presupuesto_resultado >= total else f"-${total-presupuesto_resultado:,.2f}")
-
-    if total <= presupuesto_resultado:
-        st.success(f"Compra dentro del presupuesto. Te quedan ${presupuesto_resultado-total:,.2f} MXN.")
-    else:
-        st.warning(f"La compra excede el presupuesto por ${total-presupuesto_resultado:,.2f} MXN.")
-
-    st.markdown('<div class="kc-section">🍽️ Menú completo</div>', unsafe_allow_html=True)
-    productos_por_id = {p["id"]: p for lista in CATALOGOS.values() for p in lista}
-
-    for dia in plan.get("dias", []):
-        st.markdown(f'<div class="kc-day">Día {dia.get("dia", "")}</div>', unsafe_allow_html=True)
-        for comida in dia.get("comidas", []):
-            tipo = html.escape(str(comida.get("tipo", "Comida")))
-            nombre = html.escape(str(comida.get("nombre", "Receta")))
-            st.markdown(f'<div class="kc-recipe"><div class="kc-pill">{tipo}</div><h2 style="margin:9px 0 12px 0;font-size:1.35rem">{nombre}</h2>', unsafe_allow_html=True)
-            st.markdown("**Ingredientes:**")
-            ingredientes_html = []
-            for ing in comida.get("ingredientes", []):
-                pid = ing.get("producto_id")
-                p = productos_por_id.get(pid, {})
-                nombre_ing = p.get("nombre") or ing.get("ingrediente") or pid or "Ingrediente"
-                ingredientes_html.append(f'<span class="kc-pill">{html.escape(str(nombre_ing))}: {ing.get("cantidad_por_persona")} {html.escape(str(ing.get("unidad", "")))}/persona</span>')
-            st.markdown(" ".join(ingredientes_html), unsafe_allow_html=True)
-            st.markdown("**Preparación:**")
-            for n, paso in enumerate(comida.get("preparacion", []), 1):
-                st.markdown(f"**{n}.** {paso}")
-            st.markdown("</div>", unsafe_allow_html=True)
-
-    st.markdown('<div class="kc-section">🛒 Lista de compra</div>', unsafe_allow_html=True)
-    for item in compra:
-        precio = item.get("precio_unitario")
-        subtotal = item.get("subtotal")
-        precio_txt = f"${precio:,.2f}" if precio is not None else "PRECIO NO DISPONIBLE"
-        subtotal_txt = f"${subtotal:,.2f}" if subtotal is not None else "—"
-        st.markdown(f"""<div class="kc-card"><div style="font-size:1.08rem;font-weight:850">{html.escape(str(item.get("producto","Producto")))}</div><div class="kc-muted">{html.escape(str(item.get("presentacion","")))} · {html.escape(str(item.get("tienda","")))}</div><div style="margin-top:8px"><b>{item.get("paquetes",1)} paquete(s)</b> · {precio_txt} c/u · <b>{subtotal_txt}</b></div></div>""", unsafe_allow_html=True)
-
-    st.markdown(f'<div class="kc-card"><div class="kc-muted">TOTAL CALCULADO</div><div class="kc-price">${total:,.2f} MXN</div></div>', unsafe_allow_html=True)
-
-    pdf_bytes = generar_pdf(
-        plan=plan, compra=compra, total=total,
-        presupuesto=presupuesto_resultado, personas=personas_resultado,
-        tiendas=tiendas_resultado,
-    )
-    st.download_button(
-        "📄 DESCARGAR PLAN COMPLETO EN PDF",
-        data=pdf_bytes,
-        file_name="KashCook_AI_Plan.pdf",
-        mime="application/pdf",
-        use_container_width=True,
-    )
-
+st.divider()
