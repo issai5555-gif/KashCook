@@ -127,11 +127,41 @@ def money(x):
     return f"${float(x):,.2f}"
 
 def safe_json(text):
-    text = text.strip().replace("```json", "").replace("```", "").strip()
-    m = re.search(r"\{.*\}", text, re.S)
-    if m:
-        text = m.group(0)
-    return json.loads(text)
+    """Parsea respuestas JSON de la IA de forma tolerante sin inventar datos."""
+    if isinstance(text, dict):
+        return text
+    raw = str(text or "").strip()
+    raw = re.sub(r"^```(?:json)?\s*", "", raw, flags=re.I)
+    raw = re.sub(r"\s*```$", "", raw).strip()
+
+    # Primero intenta JSON puro.
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        pass
+
+    # Busca el primer objeto JSON completo usando raw_decode, evitando
+    # el greedy regex que podía capturar texto extra y producir el 88/4268.
+    decoder = json.JSONDecoder()
+    start = raw.find("{")
+    while start >= 0:
+        try:
+            obj, _ = decoder.raw_decode(raw[start:])
+            if isinstance(obj, dict):
+                return obj
+        except json.JSONDecodeError:
+            start = raw.find("{", start + 1)
+            continue
+        break
+
+    # Último intento: limpiar comas finales, que son un error frecuente.
+    cleaned = re.sub(r",\s*([}\]])", r"\1", raw)
+    try:
+        return json.loads(cleaned)
+    except json.JSONDecodeError as exc:
+        pos = getattr(exc, "pos", 0)
+        preview = raw[max(0, pos-140):pos+220].replace("\n", " ")
+        raise ValueError(f"La IA devolvió JSON inválido cerca de: {preview}") from exc
 
 def ingredient_alias(base):
     aliases = {
@@ -190,8 +220,9 @@ def generate_plan(days, people, budget, stores, styles, meals, appliances, restr
         res = client.chat.completions.create(
             model="openai/gpt-oss-120b",
             messages=[{"role":"user", "content":prompt}],
-            temperature=0.55,
-            max_tokens=2800,
+            temperature=0.35,
+            max_tokens=3200,
+            response_format={"type": "json_object"},
         )
     except Exception as e:
         msg = str(e)
@@ -199,8 +230,9 @@ def generate_plan(days, people, budget, stores, styles, meals, appliances, restr
             res = client.chat.completions.create(
                 model="openai/gpt-oss-120b",
                 messages=[{"role":"user", "content":prompt[:8500]}],
-                temperature=0.45,
-                max_tokens=2200,
+                temperature=0.30,
+                max_tokens=2600,
+                response_format={"type": "json_object"},
             )
         else:
             raise
