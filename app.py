@@ -3,6 +3,13 @@ import json
 import math
 import re
 import html
+import time
+from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from urllib.parse import quote_plus
+
+import requests
+from bs4 import BeautifulSoup
 
 import streamlit as st
 from groq import Groq
@@ -70,7 +77,15 @@ def producto(
         "presentacion": presentacion,
         "contenido": float(contenido),
         "unidad_contenido": unidad_contenido,
-        "precio": float(precio),
+        # IMPORTANTE: el valor numérico recibido en "precio" se conserva
+        # únicamente por compatibilidad con el catálogo heredado.
+        # NUNCA se utiliza como precio de compra. Los precios válidos son
+        # únicamente los obtenidos públicamente durante la actualización.
+        "precio": None,
+        "precio_verificado": False,
+        "fuente_precio": None,
+        "url_precio": None,
+        "precio_actualizado": None,
     }
 
 
@@ -1041,6 +1056,249 @@ CATALOGOS = crear_catalogos()
 
 
 # ============================================================
+# PRECIOS PÚBLICOS / ACTUALES
+# ============================================================
+
+# No se usan precios escritos a mano para calcular la compra.
+# KashCook intenta obtener el precio publicado por cada tienda.
+# Si no puede verificarlo, el producto queda como:
+# "PRECIO NO DISPONIBLE".
+
+FUENTES_TIENDAS = {
+    "Alsuper": "https://alsuper.com/buscar?q={q}",
+    "Walmart": "https://www.walmart.com.mx/search?q={q}",
+    "Soriana": "https://www.soriana.com/buscar?q={q}",
+    "Bodega Aurrerá": "https://www.bodegaaurrera.com.mx/search?q={q}",
+}
+
+PRECIO_NO_DISPONIBLE = "PRECIO NO DISPONIBLE"
+
+
+def _precio_desde_texto(texto):
+    if not texto:
+        return None
+    patrones = [
+        r"\$\s*([0-9]{1,4}(?:,[0-9]{3})*(?:\.[0-9]{1,2})?)",
+        r"([0-9]{1,4}(?:,[0-9]{3})*(?:\.[0-9]{1,2})?)\s*MXN",
+    ]
+    candidatos = []
+    for patron in patrones:
+        for m in re.finditer(patron, texto, flags=re.I):
+            try:
+                valor = float(m.group(1).replace(",", ""))
+            except Exception:
+                continue
+            if 1 <= valor <= 10000:
+                candidatos.append(valor)
+    if not candidatos:
+        return None
+    return candidatos[0]
+
+
+def _normalizar_para_busqueda(texto):
+    texto = normalizar_texto(texto)
+    texto = re.sub(r"[^a-z0-9]+", " ", texto.lower())
+    return re.sub(r"\s+", " ", texto).strip()
+
+
+def _puntaje_nombre(nombre, consulta):
+    n = _normalizar_para_busqueda(nombre)
+    q = _normalizar_para_busqueda(consulta)
+    tokens = [t for t in q.split() if len(t) >= 4]
+    if not tokens:
+        return 0
+    aciertos = sum(1 for t in tokens if t in n)
+    return aciertos / len(tokens)
+
+
+def _extraer_productos_jsonld(soup):
+    encontrados = []
+
+    def recorrer(obj):
+        if isinstance(obj, dict):
+            tipo = obj.get("@type")
+            if tipo == "Product" or (isinstance(tipo, list) and "Product" in tipo):
+                nombre = obj.get("name")
+                ofertas = obj.get("offers")
+                precio = None
+                moneda = None
+                url = obj.get("url")
+                if isinstance(ofertas, dict):
+                    precio = ofertas.get("price") or ofertas.get("lowPrice")
+                    moneda = ofertas.get("priceCurrency")
+                    url = ofertas.get("url") or url
+                elif isinstance(ofertas, list):
+                    for oferta in ofertas:
+                        if isinstance(oferta, dict):
+                            precio = oferta.get("price") or oferta.get("lowPrice")
+                            moneda = oferta.get("priceCurrency")
+                            url = oferta.get("url") or url
+                            if precio is not None:
+                                break
+                if nombre:
+                    try:
+                        precio_num = float(str(precio).replace(",", "")) if precio is not None else None
+                    except Exception:
+                        precio_num = None
+                    encontrados.append({
+                        "nombre": str(nombre),
+                        "precio": precio_num if moneda in (None, "MXN", "mxn") else None,
+                        "url": url,
+                    })
+            for v in obj.values():
+                recorrer(v)
+        elif isinstance(obj, list):
+            for v in obj:
+                recorrer(v)
+
+    for script in soup.find_all("script", type="application/ld+json"):
+        try:
+            data = json.loads(script.string or script.get_text())
+            recorrer(data)
+        except Exception:
+            continue
+    return encontrados
+
+
+def _extraer_candidatos_html(soup, consulta):
+    candidatos = []
+    palabras = [p for p in _normalizar_para_busqueda(consulta).split() if len(p) >= 4]
+
+    for nodo in soup.find_all(["article", "li", "div"]):
+        texto = " ".join(nodo.stripped_strings)
+        if len(texto) < 10 or len(texto) > 2500:
+            continue
+        normal = _normalizar_para_busqueda(texto)
+        if not any(p in normal for p in palabras[:2]):
+            continue
+        precio = _precio_desde_texto(texto)
+        if precio is None:
+            continue
+        enlace = nodo.find("a", href=True)
+        url = enlace.get("href") if enlace else None
+        if url and url.startswith("/"):
+            url = None
+        candidatos.append({"nombre": texto[:300], "precio": precio, "url": url})
+        if len(candidatos) >= 20:
+            break
+    return candidatos
+
+
+def obtener_precio_publico(producto_obj, session=None):
+    tienda = producto_obj["tienda"]
+    plantilla = FUENTES_TIENDAS.get(tienda)
+    if not plantilla:
+        return None
+
+    consulta = producto_obj["nombre"]
+    url_busqueda = plantilla.format(q=quote_plus(consulta))
+    ses = session or requests.Session()
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/154.0 Safari/537.36"
+        ),
+        "Accept-Language": "es-MX,es;q=0.9,en;q=0.7",
+    }
+
+    try:
+        respuesta = ses.get(url_busqueda, headers=headers, timeout=12, allow_redirects=True)
+        if respuesta.status_code != 200:
+            return None
+        soup = BeautifulSoup(respuesta.text, "html.parser")
+
+        candidatos = _extraer_productos_jsonld(soup)
+        candidatos.extend(_extraer_candidatos_html(soup, consulta))
+
+        mejores = []
+        for c in candidatos:
+            precio = c.get("precio")
+            if precio is None or precio <= 0:
+                continue
+            score = _puntaje_nombre(c.get("nombre", ""), consulta)
+            if score >= 0.35:
+                mejores.append((score, precio, c))
+
+        if not mejores:
+            return None
+
+        mejores.sort(key=lambda x: (-x[0], x[1]))
+        _, precio, candidato = mejores[0]
+        return {
+            "precio": round(float(precio), 2),
+            "url": candidato.get("url") or url_busqueda,
+            "fuente": tienda,
+            "fecha": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        }
+    except Exception:
+        return None
+
+
+def actualizar_precios_publicos(tiendas_seleccionadas):
+    catalogo = []
+    for tienda in tiendas_seleccionadas:
+        catalogo.extend(CATALOGOS.get(tienda, []))
+
+    # Evita volver a consultar innecesariamente en cada rerun de Streamlit.
+    firma = tuple(sorted((p["id"], p["tienda"], p["nombre"]) for p in catalogo))
+    cache_key = "precios_publicos_cache"
+    cache = st.session_state.get(cache_key)
+    ahora = time.time()
+    if cache and cache.get("firma") == firma and ahora - cache.get("timestamp", 0) < 3600:
+        return cache["catalogo"], cache.get("errores", [])
+
+    errores = []
+    resultados = {}
+    tareas = {}
+
+    with ThreadPoolExecutor(max_workers=min(8, max(1, len(catalogo)))) as executor:
+        for p in catalogo:
+            tareas[executor.submit(obtener_precio_publico, p)] = p
+
+        for futuro in as_completed(tareas):
+            p = tareas[futuro]
+            try:
+                resultado = futuro.result()
+            except Exception:
+                resultado = None
+            if resultado:
+                resultados[p["id"]] = resultado
+
+    catalogo_actualizado = []
+    for p in catalogo:
+        copia = dict(p)
+        dato = resultados.get(p["id"])
+        if dato:
+            copia["precio"] = dato["precio"]
+            copia["precio_verificado"] = True
+            copia["fuente_precio"] = dato["fuente"]
+            copia["url_precio"] = dato["url"]
+            copia["precio_actualizado"] = dato["fecha"]
+        else:
+            copia["precio"] = None
+            copia["precio_verificado"] = False
+            copia["fuente_precio"] = None
+            copia["url_precio"] = None
+            copia["precio_actualizado"] = None
+            errores.append(f"{p['tienda']}: {p['nombre']}")
+        catalogo_actualizado.append(copia)
+
+    st.session_state[cache_key] = {
+        "firma": firma,
+        "timestamp": ahora,
+        "catalogo": catalogo_actualizado,
+        "errores": errores,
+    }
+    return catalogo_actualizado, errores
+
+
+def catalogo_por_tiendas(tiendas, catalogo_actualizado):
+    permitidas = set(tiendas)
+    return [p for p in catalogo_actualizado if p["tienda"] in permitidas]
+
+
+# ============================================================
 # CLIENTE GROQ
 # ============================================================
 
@@ -1072,32 +1330,41 @@ def obtener_cliente_groq():
 
 def llamar_groq(cliente, prompt, temperatura=0.4):
 
-    respuesta = cliente.chat.completions.create(
-        model="openai/gpt-oss-120b",
-        messages=[
-            {
-                "role": "system",
-                "content": (
-                    "Eres KashCook AI. Diseñas menús familiares, "
-                    "recetas, cantidades y compras. Responde solo "
-                    "JSON válido cuando se solicite un plan."
-                ),
-            },
-            {
-                "role": "user",
-                "content": prompt,
-            },
-        ],
-        temperature=temperatura,
-        max_tokens=8000,
-        response_format={"type": "json_object"},
-    )
+    mensajes = [
+        {
+            "role": "system",
+            "content": (
+                "Eres KashCook AI. Diseñas menús familiares, "
+                "recetas, cantidades y compras. Responde solo "
+                "JSON válido cuando se solicite un plan."
+            ),
+        },
+        {"role": "user", "content": prompt},
+    ]
+
+    try:
+        respuesta = cliente.chat.completions.create(
+            model="openai/gpt-oss-120b",
+            messages=mensajes,
+            temperature=temperatura,
+            max_tokens=4500,
+            response_format={"type": "json_object"},
+        )
+    except Exception as error:
+        mensaje_error = str(error).lower()
+        if not any(x in mensaje_error for x in ("413", "too large", "tokens per minute")):
+            raise
+        respuesta = cliente.chat.completions.create(
+            model="openai/gpt-oss-120b",
+            messages=mensajes,
+            temperature=min(temperatura, 0.25),
+            max_tokens=3000,
+            response_format={"type": "json_object"},
+        )
 
     contenido = respuesta.choices[0].message.content
-
     if not contenido:
         raise ValueError("Groq no devolvió contenido.")
-
     return contenido
 
 
@@ -1594,153 +1861,80 @@ def calcular_compra(
     catalogo,
     personas,
 ):
-
-    productos_por_id = {
-        p["id"]: p
-        for p in catalogo
-    }
-
+    productos_por_id = {p["id"]: p for p in catalogo}
     demanda = {}
+    faltantes_precio = []
 
-    for dia in plan.get(
-        "dias",
-        [],
-    ):
-
-        for comida in dia.get(
-            "comidas",
-            [],
-        ):
-
-            for ing in comida.get(
-                "ingredientes",
-                [],
-            ):
-
-                producto_id = ing.get(
-                    "producto_id"
-                )
-
+    for dia in plan.get("dias", []):
+        for comida in dia.get("comidas", []):
+            for ing in comida.get("ingredientes", []):
+                producto_id = ing.get("producto_id")
                 if producto_id not in productos_por_id:
                     continue
-
                 try:
-                    cantidad_persona = float(
-                        ing.get(
-                            "cantidad_por_persona",
-                            0,
-                        )
-                    )
+                    cantidad_persona = float(ing.get("cantidad_por_persona", 0))
                 except Exception:
                     cantidad_persona = 0
-
                 if cantidad_persona <= 0:
                     continue
 
-                unidad = ing.get(
-                    "unidad",
-                    "",
-                )
-
-                cantidad_total = (
-                    cantidad_persona * personas
-                )
-
-                p = productos_por_id[
-                    producto_id
-                ]
-
-                cantidad_base, unidad_base = convertir_a_base(
-                    cantidad_total,
-                    unidad,
-                )
-
+                unidad = ing.get("unidad", "")
+                cantidad_total = cantidad_persona * personas
+                p = productos_por_id[producto_id]
+                cantidad_base, unidad_base = convertir_a_base(cantidad_total, unidad)
                 contenido_base, unidad_contenido_base = convertir_a_base(
-                    p["contenido"],
-                    p["unidad_contenido"],
+                    p["contenido"], p["unidad_contenido"]
                 )
-
-                if unidad_base != unidad_contenido_base:
-                    continue
-
-                if contenido_base <= 0:
+                if unidad_base != unidad_contenido_base or contenido_base <= 0:
                     continue
 
                 if producto_id not in demanda:
-
                     demanda[producto_id] = {
                         "producto": p,
                         "cantidad_requerida": 0,
                         "unidad": unidad_base,
                     }
-
-                demanda[
-                    producto_id
-                ]["cantidad_requerida"] += cantidad_base
+                demanda[producto_id]["cantidad_requerida"] += cantidad_base
 
     compra = []
-
-    total = 0
+    total = 0.0
+    presupuesto_verificable = True
 
     for producto_id, item in demanda.items():
-
         p = item["producto"]
+        contenido_base, _ = convertir_a_base(p["contenido"], p["unidad_contenido"])
+        paquetes = max(1, math.ceil(item["cantidad_requerida"] / contenido_base))
+        precio = p.get("precio")
+        precio_disponible = bool(p.get("precio_verificado") and precio is not None and precio > 0)
 
-        contenido_base, _ = convertir_a_base(
-            p["contenido"],
-            p["unidad_contenido"],
-        )
+        if not precio_disponible:
+            presupuesto_verificable = False
+            faltantes_precio.append(p["nombre"])
+            subtotal = None
+        else:
+            subtotal = round(paquetes * float(precio), 2)
+            total += subtotal
 
-        paquetes = math.ceil(
-            item["cantidad_requerida"]
-            / contenido_base
-        )
+        compra.append({
+            "producto": p["nombre"],
+            "ingrediente_base": p["ingrediente_base"],
+            "presentacion": p["presentacion"],
+            "contenido": p["contenido"],
+            "unidad_contenido": p["unidad_contenido"],
+            "cantidad_requerida": item["cantidad_requerida"],
+            "unidad": item["unidad"],
+            "paquetes": paquetes,
+            "precio_unitario": float(precio) if precio_disponible else None,
+            "precio_texto": f"${float(precio):,.2f}" if precio_disponible else PRECIO_NO_DISPONIBLE,
+            "subtotal": subtotal,
+            "subtotal_texto": f"${subtotal:,.2f}" if subtotal is not None else PRECIO_NO_DISPONIBLE,
+            "tienda": p["tienda"],
+            "precio_verificado": precio_disponible,
+            "fuente_precio": p.get("fuente_precio"),
+            "url_precio": p.get("url_precio"),
+        })
 
-        if paquetes < 1:
-            paquetes = 1
-
-        subtotal = (
-            paquetes * p["precio"]
-        )
-
-        total += subtotal
-
-        compra.append(
-            {
-                "producto": p["nombre"],
-                "ingrediente_base": p[
-                    "ingrediente_base"
-                ],
-                "presentacion": p[
-                    "presentacion"
-                ],
-                "contenido": p[
-                    "contenido"
-                ],
-                "unidad_contenido": p[
-                    "unidad_contenido"
-                ],
-                "cantidad_requerida": item[
-                    "cantidad_requerida"
-                ],
-                "unidad": item[
-                    "unidad"
-                ],
-                "paquetes": paquetes,
-                "precio_unitario": p[
-                    "precio"
-                ],
-                "subtotal": subtotal,
-                "tienda": p[
-                    "tienda"
-                ],
-            }
-        )
-
-    return (
-        compra,
-        round(total, 2),
-    )
+    return compra, round(total, 2), presupuesto_verificable, faltantes_precio
 
 
 # ============================================================
@@ -1766,7 +1960,7 @@ def construir_prompt(
         catalogo_lineas.append(
             f"{p['id']}|{p['tienda']}|{p['ingrediente_base']}|"
             f"{p['nombre']}|{p['contenido']}{p['unidad_contenido']}|"
-            f"{p['precio']}"
+            f"{p['precio'] if p.get('precio_verificado') else PRECIO_NO_DISPONIBLE}"
         )
 
     comidas_texto = ", ".join(comidas)
@@ -1788,6 +1982,7 @@ REGLAS:
 - Varía proteínas: pollo, res, cerdo, pescado, atún, sardina y huevo cuando sea compatible con días, comidas y restricciones. No hagas todo a base de pollo.
 - Varía recetas y usa acompañamientos/verduras adecuados.
 - No inventes productos ni precios.
+- Prioriza productos con precio verificado. Nunca conviertas PRECIO NO DISPONIBLE en un número.
 - Objetivo: usar aproximadamente 90-100% del presupuesto cuando sea posible. Puede quedar por debajo; nunca superes el límite absoluto.
 - Cada día debe contener EXACTAMENTE las comidas solicitadas, sin omitir ninguna.
 - Cada comida necesita nombre, al menos 2 ingredientes y al menos 2 pasos de preparación.
@@ -1821,7 +2016,7 @@ def construir_prompt_ajuste(
     for p in catalogo:
         catalogo_lineas.append(
             f"{p['id']}|{p['tienda']}|{p['ingrediente_base']}|"
-            f"{p['nombre']}|{p['contenido']}{p['unidad_contenido']}|{p['precio']}"
+            f"{p['nombre']}|{p['contenido']}{p['unidad_contenido']}|{p['precio'] if p.get('precio_verificado') else PRECIO_NO_DISPONIBLE}"
         )
 
     plan_compacto = json.dumps(plan, ensure_ascii=False, separators=(",", ":"))
@@ -1857,8 +2052,27 @@ Devuelve SOLO JSON válido en la misma estructura del plan. Cada comida debe con
 
 
 # ============================================================
-# GENERAR PDF
+# APROVECHAMIENTO Y AVISO DE PRECIOS
+# ============================================================
 
+def generar_aprovechamiento(compra):
+    recomendaciones = []
+    categorias = {str(item.get("ingrediente_base", "")).lower() for item in compra}
+    if any(x in categorias for x in {"pollo", "res", "cerdo", "pescado"}):
+        recomendaciones.append("Divide las proteínas en porciones antes de congelarlas para evitar descongelar de más.")
+    if any(x in categorias for x in {"cebolla", "tomate", "zanahoria", "papa", "lechuga", "calabaza"}):
+        recomendaciones.append("Organiza las verduras al recibirlas y utiliza primero las más perecederas.")
+    if "tortilla" in categorias:
+        recomendaciones.append("Separa las tortillas en porciones y congela las que no vayas a consumir pronto.")
+    if any(x in categorias for x in {"arroz", "frijol"}):
+        recomendaciones.append("Refrigera o congela porciones de arroz y frijol sobrantes para reutilizarlas en otra comida.")
+    if not recomendaciones:
+        recomendaciones.append("Conserva los sobrantes en recipientes cerrados, etiquétalos y utiliza primero los alimentos más perecederos.")
+    return recomendaciones
+
+
+# ============================================================
+# GENERAR PDF
 # ============================================================
 
 def generar_pdf(
@@ -1943,6 +2157,11 @@ def generar_pdf(
         )
     )
 
+    compra_verificada = bool(compra) and all(
+        item.get("precio_verificado", False) for item in compra
+    )
+    estado_compra = "Compra verificada" if compra_verificada else "Compra parcial: hay precios no disponibles"
+
     story.append(
         Paragraph(
             f"Plan alimenticio para {personas} persona(s)<br/>"
@@ -1950,7 +2169,7 @@ def generar_pdf(
             f"Tiendas seleccionadas: "
             f"{html.escape(', '.join(tiendas))}<br/>"
             f"Presupuesto: ${presupuesto:,.2f} MXN<br/>"
-            f"Compra estimada: ${total:,.2f} MXN",
+            f"{estado_compra}: ${total:,.2f} MXN",
             subtitulo,
         )
     )
@@ -2061,7 +2280,7 @@ def generar_pdf(
                         f"{cantidad} "
                         f"{html.escape(str(unidad))} "
                         f"por persona",
-                        texto_pequeno,
+                        pequeno,
                     )
                 )
 
@@ -2100,7 +2319,7 @@ def generar_pdf(
                     Paragraph(
                         f"{numero}. "
                         f"{html.escape(str(paso))}",
-                        texto_pequeno,
+                        pequeno,
                     )
                 )
 
@@ -2198,12 +2417,12 @@ def generar_pdf(
                 ),
 
                 Paragraph(
-                    f"${item['precio_unitario']:,.2f}",
+                    html.escape(item.get("precio_texto", PRECIO_NO_DISPONIBLE)),
                     pequeno,
                 ),
 
                 Paragraph(
-                    f"${item['subtotal']:,.2f}",
+                    html.escape(item.get("subtotal_texto", PRECIO_NO_DISPONIBLE)),
                     pequeno,
                 ),
 
@@ -2299,13 +2518,31 @@ def generar_pdf(
     story.append(
         Spacer(
             1,
+            10,
+        )
+    )
+
+    story.append(Paragraph("APROVECHAMIENTO", dia_style))
+    for recomendacion in generar_aprovechamiento(compra):
+        story.append(Paragraph("• " + html.escape(recomendacion), normal))
+
+    story.append(
+        Paragraph(
+            "<b>Aviso de precios:</b> los precios públicos consultados pueden cambiar por promociones, disponibilidad, peso real o actualización de la tienda. Verifica el precio final antes de pagar.",
+            pequeno,
+        )
+    )
+
+    story.append(
+        Spacer(
+            1,
             12,
         )
     )
 
     story.append(
         Paragraph(
-            f"<b>TOTAL DE COMPRA: "
+            f"<b>{'TOTAL DE COMPRA VERIFICADO' if compra_verificada else 'TOTAL PARCIAL (HAY PRECIOS NO DISPONIBLES)'}: "
             f"${total:,.2f} MXN</b>",
             ParagraphStyle(
                 "TotalKash",
@@ -2410,6 +2647,10 @@ if not tiendas_seleccionadas:
     )
 
     st.stop()
+
+if st.button("🔄 Actualizar precios públicos ahora"):
+    st.session_state.pop("precios_publicos_cache", None)
+    st.success("Cache de precios eliminado. La próxima generación consultará nuevamente las tiendas.")
 
 
 # ============================================================
@@ -2579,18 +2820,12 @@ if st.button(
 
         st.stop()
 
-    catalogo = []
+    catalogo_base = []
 
     for tienda in tiendas_seleccionadas:
+        catalogo_base.extend(CATALOGOS.get(tienda, []))
 
-        catalogo.extend(
-            CATALOGOS.get(
-                tienda,
-                [],
-            )
-        )
-
-    if not catalogo:
+    if not catalogo_base:
 
         st.error(
             "No hay productos disponibles "
@@ -2600,10 +2835,32 @@ if st.button(
         st.stop()
 
     with st.spinner(
-        "KashCook está diseñando tu menú..."
+        "Actualizando precios públicos y diseñando tu menú..."
     ):
 
         try:
+
+            # =================================================
+            # PRECIOS REALES / PÚBLICOS
+            # =================================================
+            catalogo, errores_precio = actualizar_precios_publicos(
+                tiendas_seleccionadas
+            )
+
+            precios_ok = sum(1 for p in catalogo if p.get("precio_verificado"))
+            precios_total = len(catalogo)
+
+            if precios_ok == 0:
+                st.warning(
+                    "No se pudo verificar ningún precio público en este momento. "
+                    "KashCook no usará precios inventados; los productos aparecerán "
+                    "como PRECIO NO DISPONIBLE y el total de compra no se considerará verificable."
+                )
+            elif precios_ok < precios_total:
+                st.info(
+                    f"Precios públicos verificados: {precios_ok}/{precios_total}. "
+                    "Los productos sin precio quedan como PRECIO NO DISPONIBLE y no se inventará ningún importe."
+                )
 
             # =================================================
             # PLAN INICIAL
@@ -2661,18 +2918,29 @@ if st.button(
             # CALCULAR COMPRA REAL
             # =================================================
 
-            compra, total = calcular_compra(
+            compra, total, presupuesto_verificable, faltantes_precio = calcular_compra(
                 plan,
                 catalogo,
                 personas,
             )
+
+            # Los ajustes económicos solo son válidos cuando TODOS los
+            # productos necesarios tienen precio público verificado.
+            # Nunca se ajusta un presupuesto usando precios inventados.
+            if not presupuesto_verificable:
+                st.warning(
+                    "El menú se generó, pero el presupuesto no puede considerarse "
+                    "real/verificado porque faltan precios públicos de: "
+                    + ", ".join(faltantes_precio)
+                )
 
             # =================================================
             # SI EL COSTO ES DEMASIADO BAJO
             # =================================================
 
             if (
-                total
+                presupuesto_verificable
+                and total
                 < presupuesto
                 * MIN_UTILIZACION_PRESUPUESTO
                 and presupuesto >= 500
@@ -2710,14 +2978,15 @@ if st.button(
 
                     if valido_ajuste:
 
-                        compra_ajustada, total_ajustado = calcular_compra(
+                        compra_ajustada, total_ajustado, verificable_ajustado, _ = calcular_compra(
                             plan_ajustado,
                             catalogo,
                             personas,
                         )
 
                         if (
-                            total_ajustado
+                            verificable_ajustado
+                            and total_ajustado
                             <= presupuesto
                             + TOLERANCIA_PRESUPUESTO
                         ):
@@ -2736,7 +3005,8 @@ if st.button(
             # =================================================
 
             if (
-                total
+                presupuesto_verificable
+                and total
                 > presupuesto
                 + TOLERANCIA_PRESUPUESTO
             ):
@@ -2773,14 +3043,15 @@ if st.button(
 
                     if valido_ajuste:
 
-                        compra_ajustada, total_ajustado = calcular_compra(
+                        compra_ajustada, total_ajustado, verificable_ajustado, _ = calcular_compra(
                             plan_ajustado,
                             catalogo,
                             personas,
                         )
 
                         if (
-                            total_ajustado
+                            verificable_ajustado
+                            and total_ajustado
                             <= presupuesto
                             + TOLERANCIA_PRESUPUESTO
                         ):
@@ -2799,7 +3070,8 @@ if st.button(
             # =================================================
 
             if (
-                total
+                presupuesto_verificable
+                and total
                 > presupuesto
                 + TOLERANCIA_PRESUPUESTO
             ):
@@ -2842,6 +3114,14 @@ if st.button(
             st.session_state[
                 "tiendas"
             ] = tiendas_seleccionadas
+
+            st.session_state[
+                "presupuesto_verificable"
+            ] = presupuesto_verificable
+
+            st.session_state[
+                "precios_verificados"
+            ] = precios_ok
 
             st.success(
                 "Plan generado correctamente."
@@ -2886,6 +3166,14 @@ if "plan" in st.session_state:
         "tiendas"
     ]
 
+    presupuesto_verificable = st.session_state.get(
+        "presupuesto_verificable", True
+    )
+
+    precios_verificados = st.session_state.get(
+        "precios_verificados", 0
+    )
+
     st.divider()
 
     st.header(
@@ -2908,7 +3196,7 @@ if "plan" in st.session_state:
     with col2:
 
         st.metric(
-            "Compra calculada",
+            "Compra verificada" if presupuesto_verificable else "Total parcial",
             f"${total:,.2f}",
         )
 
@@ -2936,7 +3224,13 @@ if "plan" in st.session_state:
     # MENSAJE PRESUPUESTO
     # ========================================================
 
-    if total <= presupuesto:
+    if not presupuesto_verificable:
+        st.warning(
+            f"El total mostrado (${total:,.2f}) es PARCIAL. "
+            "No se muestran precios inventados: los productos sin precio público "
+            "verificado aparecen como PRECIO NO DISPONIBLE."
+        )
+    elif total <= presupuesto:
 
         st.success(
             f"La compra está dentro del presupuesto. "
@@ -3092,11 +3386,11 @@ if "plan" in st.session_state:
                 "Cantidad": item[
                     "paquetes"
                 ],
-                "Precio unitario": (
-                    f"${item['precio_unitario']:,.2f}"
+                "Precio unitario": item.get(
+                    "precio_texto", PRECIO_NO_DISPONIBLE
                 ),
-                "Total": (
-                    f"${item['subtotal']:,.2f}"
+                "Total": item.get(
+                    "subtotal_texto", PRECIO_NO_DISPONIBLE
                 ),
                 "Tienda": item[
                     "tienda"
@@ -3113,7 +3407,7 @@ if "plan" in st.session_state:
         )
 
     st.subheader(
-        f"💰 Total: ${total:,.2f} MXN"
+        f"💰 {'Total verificado' if presupuesto_verificable else 'Total parcial'}: ${total:,.2f} MXN"
     )
 
     # ========================================================
