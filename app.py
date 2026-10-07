@@ -1093,7 +1093,7 @@ def llamar_groq(cliente, prompt, temperatura=0.4):
             {"role": "user", "content": prompt},
         ],
         temperature=temperatura,
-        max_tokens=6000,
+        max_tokens=4500,
     )
 
     contenido = respuesta.choices[0].message.content
@@ -2351,54 +2351,79 @@ def _resolver_producto_por_nombre(valor, catalogo):
 
 def _prompt_bloque(tienda_texto, dias_bloque, personas, estilos, comidas,
                    electrodomesticos, restricciones, catalogo):
-    indice = _indice_ingredientes(catalogo)
-    indice_texto = "\n".join(
-        f"{k}:{'/'.join(v[:3])}" for k, v in sorted(indice.items())
-    )
-    estilos_texto = ",".join(estilos) if estilos else "Libre"
-    equipo = ",".join(electrodomesticos) if electrodomesticos else "Cocina convencional"
-    restricciones = (restricciones or "Ninguna").strip()[:700]
-    comidas_texto = ",".join(comidas)
-    dias_texto = ",".join(str(x) for x in dias_bloque)
+    """Prompt compacto por bloque.
 
-    return f"""KashCook AI — bloque de días {dias_texto}.\n\nGenera SOLO los días {dias_texto}, para {personas} personas. Cada día debe contener EXACTAMENTE estas comidas: {comidas_texto}.\nEstilos: {estilos_texto}. Equipo: {equipo}. Restricciones: {restricciones}. Tiendas: {tienda_texto}.\n\nCALIDAD: crea platillos completos y sustanciosos, no recetas básicas. No hay límite de ingredientes ni de pasos. Usa los ingredientes necesarios para que cada receta sea realmente buena: proteína, verduras, aromáticos, salsa/adobo, guarnición y complementos cuando correspondan. Normalmente 6-12 ingredientes y 4-10 pasos son perfectamente válidos, pero no fuerces esos números. Varía proteínas y evita repetir preparaciones.\n\nNunca uses la palabra Almuerzo. Cantidades por persona. Unidades claras. Usa ingredientes del índice cuando existan.\nÍNDICE:\n{indice_texto}\n\nJSON: {{"dias":[{{"dia":{dias_bloque[0]},"comidas":[{{"tipo":"Comida","nombre":"...","ingredientes":[{{"ingrediente":"pollo","cantidad_por_persona":180,"unidad":"g"}}],"preparacion":["...","..."]}}]}}]}}\nDevuelve SOLO JSON válido. No Markdown. No explicaciones."""
+    No se manda el catálogo completo a Groq. La IA diseña la receta y
+    KashCook resuelve después los ingredientes contra el catálogo.
+    """
+    estilos_texto = ", ".join(estilos) if estilos else "Libre"
+    equipo = ", ".join(electrodomesticos) if electrodomesticos else "Cocina convencional"
+    restricciones = (restricciones or "Ninguna").strip()[:500]
+    comidas_texto = ", ".join(comidas)
+    dias_texto = ", ".join(str(x) for x in dias_bloque)
+
+    return f"""KashCook AI. Genera únicamente los días {dias_texto} para {personas} personas.
+
+COMIDAS OBLIGATORIAS POR DÍA: {comidas_texto}
+ESTILOS: {estilos_texto}
+EQUIPO: {equipo}
+RESTRICCIONES: {restricciones}
+TIENDAS DE REFERENCIA: {tienda_texto}
+
+CALIDAD CULINARIA:
+Crea platillos completos, abundantes y realmente cocinables. NO simplifiques las recetas para ahorrar espacio. NO existe límite de ingredientes ni de pasos. Usa todos los ingredientes que necesite cada platillo: proteína, verduras, aromáticos, especias, salsas, adobos, guarniciones, lácteos, chiles, hierbas y complementos cuando correspondan. Una receta puede tener muchos ingredientes y pasos si el platillo lo requiere.
+
+Busca variedad real entre días y comidas. Evita repetir el mismo platillo o preparación. Varía pollo, res, cerdo, pescado, atún, sardina, huevo y opciones económicas cuando sean compatibles con el estilo y presupuesto. Respeta las restricciones.
+
+Las cantidades son POR PERSONA. Usa unidades claras como g, kg, ml, pieza, lata, cucharada, cucharadita, diente, taza, etc. No uses la palabra "Almuerzo".
+
+El campo "ingrediente" debe ser el nombre normal del ingrediente, por ejemplo "pollo", "jitomate", "cebolla", "ajo", "arroz", "frijol", "chile ancho". KashCook resolverá después cada ingrediente contra su catálogo. NO inventes IDs.
+
+PREPARACIÓN: explica la receta completa, en orden lógico y con suficientes pasos para que una persona pueda cocinarla. No reduzcas pasos artificialmente.
+
+RESPONDE ÚNICAMENTE JSON VÁLIDO, SIN MARKDOWN NI TEXTO ANTES O DESPUÉS.
+Estructura exacta:
+{{"dias":[{{"dia":{dias_bloque[0]},"comidas":[{{"tipo":"Desayuno","nombre":"...","ingredientes":[{{"ingrediente":"...","cantidad_por_persona":0,"unidad":"..."}}],"preparacion":["...","..."]}}]}}]}}
+"""
 
 
 def generar_plan_por_bloques(cliente, dias, personas, estilos, comidas,
                               electrodomesticos, restricciones, catalogo,
                               tiendas):
-    """Genera el menú en bloques para evitar el JSON gigante/truncado."""
+    """Genera un día por llamada para conservar recetas completas sin truncar JSON."""
     resultado = {"dias": []}
-    # 2 días por llamada: suficiente detalle culinario sin disparar TPM.
-    bloques = []
-    inicio = 1
-    while inicio <= int(dias):
-        fin = min(inicio + 1, int(dias))
-        bloques.append(list(range(inicio, fin + 1)))
-        inicio = fin + 1
-
     tienda_texto = ", ".join(tiendas)
 
-    for bloque in bloques:
+    # Un día por llamada: bajar el tamaño de cada respuesta, NO la calidad culinaria.
+    for dia in range(1, int(dias) + 1):
         prompt = _prompt_bloque(
-            tienda_texto, bloque, personas, estilos, comidas,
+            tienda_texto, [dia], personas, estilos, comidas,
             electrodomesticos, restricciones, catalogo
         )
-        respuesta = llamar_groq(cliente, prompt, temperatura=0.55)
+
         try:
+            respuesta = llamar_groq(cliente, prompt, temperatura=0.55)
             parcial = normalizar_plan(extraer_json(respuesta))
-        except Exception:
-            # Regeneración del mismo bloque, sin reenviar la respuesta rota.
-            prompt += "\nLa respuesta anterior se perdió o quedó truncada. Regenera COMPLETO este mismo bloque."
-            respuesta = llamar_groq(cliente, prompt, temperatura=0.25)
-            parcial = normalizar_plan(extraer_json(respuesta))
+        except Exception as primer_error:
+            prompt_reintento = prompt + f"""
 
-        if not parcial.get("dias"):
-            raise ValueError(f"Groq no devolvió los días {bloque}.")
-        resultado["dias"].extend(parcial["dias"])
+REINTENTO DEL DÍA {dia}: la respuesta anterior no pudo interpretarse. Genera nuevamente TODO el día {dia}. No omitas comidas, ingredientes ni pasos. Devuelve solamente JSON válido y termina correctamente todos los corchetes y llaves."""
+            try:
+                respuesta = llamar_groq(cliente, prompt_reintento, temperatura=0.25)
+                parcial = normalizar_plan(extraer_json(respuesta))
+            except Exception as segundo_error:
+                raise ValueError(
+                    f"No se pudo generar correctamente el día {dia}. "
+                    f"La respuesta de la IA quedó incompleta o no fue JSON válido. "
+                    f"Se realizaron 2 intentos para este día."
+                ) from segundo_error
 
-    # Orden y normalización final.
-    resultado["dias"] = sorted(resultado["dias"], key=lambda d: int(d.get("dia", 999)))
+        dias_parciales = parcial.get("dias") or []
+        encontrados = [d for d in dias_parciales if int(d.get("dia", -1)) == dia]
+        if not encontrados:
+            raise ValueError(f"La IA no devolvió exactamente el día {dia}.")
+        resultado["dias"].append(encontrados[0])
+
     return normalizar_plan(resultado)
 
 
