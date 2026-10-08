@@ -1296,6 +1296,294 @@ def _consultar_precio_tienda(tienda, ingrediente_base):
     return resultado
 
 
+
+def _inferir_presentacion_producto(nombre, descripcion=""):
+    """Obtiene una presentación comercial de un nombre real de supermercado."""
+    texto = f"{nombre} {descripcion}".strip()
+    patrones = [
+        (r"(\d+(?:\.\d+)?)\s*(kg|kilo|kilogramos)\b", "kg", 1),
+        (r"(\d+(?:\.\d+)?)\s*(g|gr|gramos)\b", "g", 1),
+        (r"(\d+(?:\.\d+)?)\s*(l|lt|litro|litros)\b", "l", 1),
+        (r"(\d+(?:\.\d+)?)\s*(ml|mililitros)\b", "ml", 1),
+        (r"(\d+)\s*(pzas?|piezas|unidades|uds?)\b", "pieza", 1),
+        (r"(\d+)\s*(latas?|paquetes?|sobres?|botellas?)\b", "pieza", 1),
+    ]
+    t = normalizar_texto(texto)
+    for patron, unidad, _ in patrones:
+        m = re.search(patron, t, re.I)
+        if m:
+            valor = float(m.group(1))
+            return valor, unidad, m.group(0)
+    return None, None, ""
+
+
+def _marca_desde_producto(nombre, brand=None):
+    if brand:
+        if isinstance(brand, dict):
+            brand = brand.get("name")
+        if str(brand).strip():
+            return str(brand).strip()
+    # Algunas páginas no exponen Brand en JSON-LD. Intentamos identificar marcas
+    # frecuentes, incluyendo marcas propias, sin inventar una marca desconocida.
+    conocidas = [
+        "MiMarca", "Great Value", "Aurrera", "Extra Especial", "Precissimo",
+        "Verde Valle", "La Costeña", "Herdez", "Norteñita", "San Marcos",
+        "Lala", "Alpura", "NocheBuena", "Capullo", "Nutrioli", "Mazola",
+        "Tuny", "Dolores", "Calmex", "El Mexicano", "Bachoco", "Pilgrim's",
+        "Member's Mark", "Soriana", "Walmart", "Alsuper",
+    ]
+    n = normalizar_texto(nombre)
+    for marca in conocidas:
+        if normalizar_texto(marca) in n:
+            return marca
+    # Si no podemos identificar la marca con evidencia, no la inventamos.
+    return "Marca no identificada"
+
+
+def _producto_candidato_desde_json(obj, tienda, pagina_url, query):
+    if not isinstance(obj, dict):
+        return None
+    if str(obj.get("@type", "")).lower() not in {"product", "productgroup"} and not obj.get("name"):
+        return None
+    nombre = str(obj.get("name") or "").strip()
+    if not nombre:
+        return None
+    texto = normalizar_texto(f"{nombre} {obj.get('description','')}")
+    tokens = [x for x in normalizar_texto(query).split() if len(x) >= 3]
+    if tokens and sum(t in texto for t in tokens) < 1:
+        return None
+    offers = obj.get("offers") or {}
+    if isinstance(offers, list):
+        ofertas = offers
+    else:
+        ofertas = [offers]
+    precios = []
+    url_producto = obj.get("url") or pagina_url
+    for offer in ofertas:
+        if not isinstance(offer, dict):
+            continue
+        precio = _precio_float(offer.get("price") or offer.get("lowPrice"))
+        if precio and precio > 0:
+            precios.append((precio, offer.get("url") or url_producto))
+    if not precios:
+        return None
+    precio, url_producto = min(precios, key=lambda x: x[0])
+    contenido, unidad, texto_presentacion = _inferir_presentacion_producto(nombre, obj.get("description", ""))
+    base = normalizar_texto(query).split()[0] if query else "producto"
+    if not contenido:
+        # Productos frescos suelen cotizarse por kg. Solo lo usamos cuando el
+        # propio nombre/página contiene una señal de precio por peso.
+        desc = normalizar_texto(str(obj.get("description", "")))
+        if re.search(r"por\s*(kg|kilogramo)|\bkg\b", desc) and base in {"pollo","res","molida","puerco","pescado","camaron","papa","tomate","cebolla","zanahoria","lechuga","calabaza"}:
+            contenido, unidad = 1.0, "kg"
+        else:
+            return None
+    return {
+        "nombre": nombre,
+        "marca": _marca_desde_producto(nombre, obj.get("brand")),
+        "precio": round(float(precio), 2),
+        "contenido": float(contenido),
+        "unidad_contenido": unidad,
+        "presentacion": texto_presentacion or f"{contenido:g} {unidad}",
+        "fuente_precio": str(url_producto or pagina_url),
+        "tienda": tienda,
+    }
+
+
+def _extraer_candidatos_oficiales(html_text, query, tienda, pagina_url):
+    """Extrae varios productos/precios de la página oficial, no un precio aislado."""
+    soup = BeautifulSoup(html_text, "html.parser")
+    candidatos = []
+    vistos = set()
+    for tag in soup.find_all("script", attrs={"type": "application/ld+json"}):
+        raw = tag.string or tag.get_text(" ", strip=True)
+        try:
+            data = json.loads(raw)
+        except Exception:
+            continue
+        stack = data if isinstance(data, list) else [data]
+        while stack:
+            obj = stack.pop()
+            if isinstance(obj, dict):
+                # Graphs suelen guardar los productos dentro de @graph.
+                if "@graph" in obj and isinstance(obj["@graph"], list):
+                    stack.extend(obj["@graph"])
+                cand = _producto_candidato_desde_json(obj, tienda, pagina_url, query)
+                if cand:
+                    key = (normalizar_texto(cand["nombre"]), cand["precio"], cand["contenido"], cand["unidad_contenido"])
+                    if key not in vistos:
+                        vistos.add(key)
+                        candidatos.append(cand)
+                for v in obj.values():
+                    if isinstance(v, (dict, list)):
+                        stack.append(v)
+            elif isinstance(obj, list):
+                stack.extend(obj)
+
+    # Fallback: tarjetas HTML con nombre + precio. Es menos preciso, por eso
+    # solo acepta una tarjeta cuando contiene simultáneamente el nombre y precio.
+    for node in soup.find_all(["article", "li", "div"]):
+        texto = node.get_text(" ", strip=True)
+        if len(texto) < 8 or len(texto) > 700:
+            continue
+        norm = normalizar_texto(texto)
+        tokens = [x for x in normalizar_texto(query).split() if len(x) >= 3]
+        if tokens and sum(t in norm for t in tokens) < 1:
+            continue
+        pm = re.search(r"\$\s*([0-9]{1,5}(?:[,][0-9]{3})*(?:\.[0-9]{1,2})?)", texto)
+        if not pm:
+            continue
+        precio = _precio_float(pm.group(1))
+        if not precio or precio <= 0 or precio > 10000:
+            continue
+        # Tomamos una ventana de texto razonable y exigimos presentación.
+        contenido, unidad, pres = _inferir_presentacion_producto(texto)
+        if not contenido:
+            continue
+        nombre = re.split(r"\$\s*[0-9]", texto)[0].strip(" -|•")[:180]
+        cand = {
+            "nombre": nombre,
+            "marca": _marca_desde_producto(nombre),
+            "precio": round(precio, 2),
+            "contenido": float(contenido),
+            "unidad_contenido": unidad,
+            "presentacion": pres or f"{contenido:g} {unidad}",
+            "fuente_precio": pagina_url,
+            "tienda": tienda,
+        }
+        key = (normalizar_texto(cand["nombre"]), cand["precio"], cand["contenido"], cand["unidad_contenido"])
+        if key not in vistos:
+            vistos.add(key)
+            candidatos.append(cand)
+    return candidatos[:80]
+
+
+def _buscar_candidatos_tienda(tienda, ingrediente_base):
+    consulta = CONSULTAS_PRECIO.get(ingrediente_base, ingrediente_base.replace("_", " "))
+    clave = ("candidatos", tienda, ingrediente_base)
+    ahora = time.time()
+    cache = PRECIO_CACHE.get(clave)
+    if cache and ahora - cache["ts"] < PRECIO_CACHE_TTL:
+        return cache["resultado"]
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/154 Safari/537.36",
+        "Accept-Language": "es-MX,es;q=0.9,en;q=0.8",
+    }
+    candidatos = []
+    errores = []
+    for plantilla in BUSQUEDAS_TIENDA.get(tienda, []):
+        url = plantilla.format(q=quote_plus(consulta))
+        try:
+            r = requests.get(url, headers=headers, timeout=9, allow_redirects=True)
+            dominio = DOMINIOS_OFICIALES[tienda]
+            if r.status_code != 200 or dominio not in r.url:
+                errores.append(f"HTTP {r.status_code}")
+                continue
+            encontrados = _extraer_candidatos_oficiales(r.text, consulta, tienda, r.url)
+            if encontrados:
+                candidatos.extend(encontrados)
+                break
+            errores.append("sin productos identificables")
+        except Exception as exc:
+            errores.append(str(exc)[:80])
+    # Deduplicar y ordenar por costo normalizado cuando hay presentación.
+    unicos = {}
+    for c in candidatos:
+        clave_c = (normalizar_texto(c["nombre"]), c["contenido"], c["unidad_contenido"])
+        anterior = unicos.get(clave_c)
+        if anterior is None or c["precio"] < anterior["precio"]:
+            unicos[clave_c] = c
+    resultado = {
+        "candidatos": sorted(unicos.values(), key=lambda x: x["precio"]),
+        "ultima_verificacion": datetime.now().astimezone().isoformat(timespec="minutes"),
+        "fuente": unicos and next(iter(unicos.values())).get("fuente_precio", DOMINIOS_OFICIALES.get(tienda, "")) or DOMINIOS_OFICIALES.get(tienda, ""),
+        "error": "; ".join(errores[-2:]),
+    }
+    PRECIO_CACHE[clave] = {"ts": ahora, "resultado": resultado}
+    return resultado
+
+
+def _candidato_compatible_base(candidato, producto_referencia):
+    """Comprueba que el candidato siga representando el mismo ingrediente."""
+    nombre = normalizar_texto(candidato.get("nombre", ""))
+    base = producto_referencia.get("ingrediente_base", "")
+    consultas = normalizar_texto(CONSULTAS_PRECIO.get(base, base)).split()
+    if base == "molida":
+        return "molida" in nombre and "res" in nombre
+    # Exigimos el término principal para no confundir, por ejemplo, salsa de
+    # tomate con tomate fresco.
+    principal = consultas[0] if consultas else base
+    aliases = {
+        "atun": ("atun", "atún"), "camaron": ("camaron", "camarón"),
+        "puerco": ("cerdo", "puerco"), "pescado": ("pescado", "filete"),
+        "arroz": ("arroz",), "frijol": ("frijol",), "tortilla": ("tortilla",),
+        "huevo": ("huevo",), "queso": ("queso",), "aceite": ("aceite",),
+    }
+    return any(normalizar_texto(a) in nombre for a in aliases.get(base, (principal,)))
+
+
+def construir_catalogo_productos_optimo(catalogo, bases_necesarias, presupuesto):
+    """Busca varias marcas/presentaciones reales y arma el catálogo económico.
+
+    El precio más bajo compatible es el punto de partida. Si el presupuesto deja
+    margen, no obliga a comprar siempre la opción más barata: conserva una
+    alternativa mejor valorada cuando el costo adicional es pequeño. Así el
+    sistema funciona tanto para presupuestos muy bajos como holgados.
+    """
+    resultado = []
+    por_base = {}
+    for p in catalogo:
+        por_base.setdefault(p.get("ingrediente_base"), []).append(p)
+    for base in bases_necesarias:
+        referencias = por_base.get(base, [])
+        if not referencias:
+            continue
+        candidatos = []
+        for tienda in sorted({p.get("tienda") for p in referencias if p.get("tienda")}):
+            res = _buscar_candidatos_tienda(tienda, base)
+            for c in res.get("candidatos", []):
+                ref = next((x for x in referencias if x.get("tienda") == tienda and _candidato_compatible_base(c, x)), None)
+                if ref:
+                    cc = copy.deepcopy(ref)
+                    cc["id"] = f"{ref['id']}__live"
+                    cc["nombre"] = c["nombre"]
+                    cc["marca"] = c.get("marca", "Marca no identificada")
+                    cc["precio"] = float(c["precio"])
+                    cc["contenido"] = float(c["contenido"])
+                    cc["unidad_contenido"] = c["unidad_contenido"]
+                    cc["presentacion"] = c["presentacion"]
+                    cc["estado_precio"] = "Verificado"
+                    cc["ultima_verificacion"] = res["ultima_verificacion"]
+                    cc["fuente_precio"] = c["fuente_precio"]
+                    cc["venta_por_kg"] = c["unidad_contenido"] == "kg" and base in {"pollo","res","molida","puerco","pescado","camaron","papa","tomate","cebolla","zanahoria","lechuga","calabaza"}
+                    candidatos.append(cc)
+        if candidatos:
+            # Costo efectivo por unidad base; para productos por pieza/paquete
+            # se conserva el costo de compra real y la presentación comercial.
+            def costo_efectivo(x):
+                contenido = max(float(x.get("contenido") or 1), 1e-9)
+                unidad = x.get("unidad_contenido")
+                if unidad == "kg": return x["precio"] / contenido
+                if unidad == "g": return x["precio"] / (contenido / 1000)
+                if unidad == "l": return x["precio"] / contenido
+                if unidad == "ml": return x["precio"] / (contenido / 1000)
+                return x["precio"]
+            candidatos.sort(key=lambda x: (costo_efectivo(x), x["precio"]))
+            # Conservamos las mejores opciones por base para que la UI pueda
+            # mostrar la marca elegida y el motor pueda cambiar de presentación
+            # sin perder la trazabilidad.
+            resultado.extend(candidatos[:8])
+        else:
+            # No inventamos productos. Se dejan las referencias como no verificadas;
+            # el validador final impedirá presentar un total como real.
+            resultado.extend(copy.deepcopy(referencias))
+    # Bases no necesarias se conservan para que la estructura de recetas no se rompa.
+    usadas = {p.get("ingrediente_base") for p in resultado}
+    for p in catalogo:
+        if p.get("ingrediente_base") not in usadas:
+            resultado.append(copy.deepcopy(p))
+    return resultado
+
 def verificar_precios_tiendas(catalogo, bases_necesarias=None, ids_necesarios=None):
     """Verifica solo los ingredientes/productos que realmente requiere el plan.
 
@@ -1309,6 +1597,11 @@ def verificar_precios_tiendas(catalogo, bases_necesarias=None, ids_necesarios=No
     for p in actualizado:
         base = p.get("ingrediente_base")
         if p.get("id") not in ids or base not in bases:
+            continue
+        # Los candidatos __live ya fueron obtenidos desde la ficha/búsqueda oficial
+        # y tienen precio, marca, presentación, fuente y hora de verificación.
+        # No los reemplazamos por el primer precio genérico de la página de búsqueda.
+        if str(p.get("id", "")).endswith("__live") and p.get("estado_precio") == "Verificado":
             continue
         resultado = _consultar_precio_tienda(p.get("tienda"), base)
         if resultado.get("precio") is not None:
@@ -2029,7 +2322,9 @@ def calcular_compra(
 
         compra.append(
             {
+                "producto_id": p.get("id"),
                 "producto": p["nombre"],
+                "marca": p.get("marca", "Marca no identificada"),
                 "ingrediente_base": p[
                     "ingrediente_base"
                 ],
@@ -3492,10 +3787,41 @@ if generar_menu:
         st.stop()
     with st.spinner("KashCook está construyendo el menú, verificando recetas, cantidades y precios actuales..."):
         try:
-            # Primero construimos una propuesta con la biblioteca de recetas reales.
-            plan,total_ref=generar_plan_seguro(dias=int(dias),personas=int(personas),presupuesto=float(presupuesto),comidas=comidas,catalogo=catalogo,estilos=estilos,electrodomesticos=electrodomesticos,restricciones=restricciones)
+            # PRIMERA PASADA: solo para saber qué ingredientes necesita un menú real.
+            # No usamos esta pasada para presentar precios al usuario. Se permite
+            # un presupuesto amplio porque todavía estamos usando precios de referencia.
+            presupuesto_exploracion=max(float(presupuesto), 100000.0)
+            plan_previo,total_ref=generar_plan_seguro(
+                dias=int(dias), personas=int(personas), presupuesto=presupuesto_exploracion,
+                comidas=comidas, catalogo=catalogo, estilos=estilos,
+                electrodomesticos=electrodomesticos, restricciones=restricciones
+            )
+            bases_necesarias={
+                ing.get("ingrediente_base") or next((x.get("ingrediente_base") for x in catalogo if x.get("id")==ing.get("producto_id")), None)
+                for dia in plan_previo.get("dias",[])
+                for comida in dia.get("comidas",[])
+                for ing in comida.get("ingredientes",[])
+                if ing.get("producto_id")
+            }
+            bases_necesarias.discard(None)
 
-            # Verificamos SOLO los ingredientes que realmente aparecen en el menú.
+            # SEGUNDA PASADA: buscamos múltiples productos reales por ingrediente,
+            # comparamos marcas/presentaciones y construimos un catálogo optimizado.
+            # Esto permite que MiMarca, Great Value, Aurrera, etc. ganen cuando son
+            # más económicas, sin alterar la receta ni las porciones.
+            catalogo_optimizado=construir_catalogo_productos_optimo(
+                catalogo, bases_necesarias, float(presupuesto)
+            )
+
+            # TERCERA PASADA: ahora sí construimos el menú usando los productos
+            # verificados y sus costos reales. El motor puede escoger otra receta
+            # si la combinación actual no entra en el presupuesto.
+            plan,total_ref=generar_plan_seguro(
+                dias=int(dias), personas=int(personas), presupuesto=float(presupuesto),
+                comidas=comidas, catalogo=catalogo_optimizado, estilos=estilos,
+                electrodomesticos=electrodomesticos, restricciones=restricciones
+            )
+
             ids_necesarios={
                 ing.get("producto_id")
                 for dia in plan.get("dias",[])
@@ -3503,12 +3829,12 @@ if generar_menu:
                 for ing in comida.get("ingredientes",[])
                 if ing.get("producto_id")
             }
-            bases_necesarias={
+            bases_finales={
                 p.get("ingrediente_base")
-                for p in catalogo
+                for p in catalogo_optimizado
                 if p.get("id") in ids_necesarios
             }
-            catalogo_verificado=verificar_precios_tiendas(catalogo,bases_necesarias,ids_necesarios)
+            catalogo_verificado=verificar_precios_tiendas(catalogo_optimizado,bases_finales,ids_necesarios)
             compra,total=calcular_compra(plan,catalogo_verificado,personas)
             validar_precios_verificados(compra)
             if total > float(presupuesto) + TOLERANCIA_PRESUPUESTO:
@@ -3573,8 +3899,12 @@ if "plan" in st.session_state:
         st.info("La lista de compras se calcula sumando los ingredientes de TODOS los días y convirtiéndolos a presentaciones comerciales. Si un ingrediente aparece en una receta, debe aparecer aquí o el menú se considera inválido.")
         for x in compra:
             estado=x.get("estado_precio","Referencia")
-            marca="🟢 Precio verificado" if estado=="Verificado" else "🔴 Precio no disponible"
-            st.markdown(f"<div class='card'><h3>{x['producto']}</h3><div class='muted'>{x['presentacion']} · {((f"{x['paquetes']:.2f} kg requeridos" if x.get('estado_precio')=="Verificado" and x.get('unidad')=="g" and x.get('paquetes',0)<10 else f"{x['paquetes']} paquete(s)"))} · {x['tienda']}</div><p><b>${x['precio_unitario']:,.2f} c/u</b> · subtotal <b>${x['subtotal']:,.2f}</b></p><div class='small-note'>{marca} · {x.get('ultima_verificacion','')}</div></div>",unsafe_allow_html=True)
+            marca_estado="🟢 Precio verificado" if estado=="Verificado" else "🔴 Precio no disponible"
+            # El nombre viene de la ficha real; la marca se muestra además por separado
+            # para que el usuario sepa exactamente qué buscar en el supermercado.
+            p_catalogo=productos_por_id.get(x.get("producto_id"), {})
+            marca_producto=p_catalogo.get("marca") or x.get("marca") or "Marca no identificada"
+            st.markdown(f"<div class='card'><h3>{x['producto']}</h3><div class='muted'><b>Marca:</b> {marca_producto} · {x['presentacion']} · {((f"{x['paquetes']:.2f} kg requeridos" if x.get('estado_precio')=="Verificado" and x.get('unidad')=="g" and x.get('paquetes',0)<10 else f"{x['paquetes']} paquete(s)"))} · {x['tienda']}</div><p><b>${x['precio_unitario']:,.2f} c/u</b> · subtotal <b>${x['subtotal']:,.2f}</b></p><div class='small-note'>{marca_estado} · {x.get('ultima_verificacion','')}</div></div>",unsafe_allow_html=True)
 
     with tabs[2]:
         restante=presupuesto-total
