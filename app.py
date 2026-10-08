@@ -1766,6 +1766,89 @@ def _consultar_con_reader_oficial(tienda, ingrediente_base, headers):
             continue
     return []
 
+
+def _buscar_candidatos_desde_busqueda_web(tienda, ingrediente_base, headers, max_resultados=12):
+    """Último puente de precios cuando la tienda bloquea HTML/JS.
+
+    Busca EXCLUSIVAMENTE resultados cuyo dominio sea el supermercado elegido.
+    El precio se toma del fragmento que acompaña a ese resultado y la fuente
+    guardada es la URL oficial del producto. No usa catálogos internos ni
+    precios de terceros.
+
+    Es una capa de contingencia: primero se intenta siempre la tienda oficial.
+    """
+    dominio=DOMINIOS_OFICIALES.get(tienda, "")
+    consulta=CONSULTAS_PRECIO.get(ingrediente_base, ingrediente_base.replace("_"," "))
+    if not dominio or not consulta:
+        return []
+    queries=[
+        f'site:{dominio} "{consulta}" "$"',
+        f'site:{dominio} "{consulta}" precio',
+    ]
+    motores=[
+        "https://www.google.com/search?q={q}&num=10&hl=es",
+        "https://www.bing.com/search?q={q}&count=10&setlang=es-MX",
+    ]
+    out=[]; seen=set()
+    aliases={
+        "tomate":("tomate","jitomate"), "cebolla":("cebolla",),
+        "huevo":("huevo",), "aceite":("aceite",), "tortilla":("tortilla",),
+        "arroz":("arroz",), "frijol":("frijol",), "papa":("papa",),
+        "zanahoria":("zanahoria",), "calabaza":("calabaza","calabacita"),
+        "queso":("queso",), "molida":("molida","res"), "res":("res",),
+        "pollo":("pollo",), "puerco":("cerdo","puerco"),
+        "pescado":("pescado","filete","tilapia","mojarra","salmon"),
+        "atun":("atun","atún"), "sardina":("sardina",), "camaron":("camaron","camarón"),
+    }
+    alias=aliases.get(ingrediente_base,(normalizar_texto(consulta).split()[0],))
+    for q0 in queries:
+        q=quote_plus(q0)
+        for plantilla in motores:
+            try:
+                r=requests.get(plantilla.format(q=q),headers=headers,timeout=6.0,allow_redirects=True)
+                if r.status_code!=200 or not r.text: continue
+                soup=BeautifulSoup(r.text,"html.parser")
+                for a in soup.find_all("a",href=True):
+                    href=a.get("href","")
+                    texto=a.get_text(" ",strip=True)
+                    if dominio not in href: continue
+                    if not texto: continue
+                    bloque=" ".join([texto, a.parent.get_text(" ",strip=True) if a.parent else ""])
+                    norm=normalizar_texto(bloque)
+                    if not any(normalizar_texto(x) in norm for x in alias): continue
+                    pm=re.search(r"\$\s*([0-9]{1,5}(?:[,][0-9]{3})?(?:\.[0-9]{1,2})?)",bloque)
+                    if not pm:
+                        # A veces el precio aparece en el hermano/contenedor del resultado.
+                        cont=a.find_parent(["div","li"])
+                        if cont:
+                            bloque=cont.get_text(" ",strip=True)
+                            pm=re.search(r"\$\s*([0-9]{1,5}(?:[,][0-9]{3})?(?:\.[0-9]{1,2})?)",bloque)
+                    if not pm: continue
+                    precio=_precio_float(pm.group(1))
+                    if not precio or not (1<=precio<=10000): continue
+                    contenido,unidad,pres=_inferir_presentacion_producto(bloque)
+                    if not contenido:
+                        if re.search(r"\bpor\s*(kg|kilo|kilogramo)\b|\$/?\s*kg",normalizar_texto(bloque)):
+                            contenido,unidad,pres=1.0,"kg","1 kg"
+                        else:
+                            continue
+                    href=href.split("#")[0]
+                    key=(href,round(precio,2),contenido,unidad)
+                    if key in seen: continue
+                    if not _candidato_compatible_base({"nombre":texto}, {"ingrediente_base":ingrediente_base}):
+                        continue
+                    seen.add(key)
+                    out.append({"nombre":texto[:220],"marca":_marca_desde_producto(texto),"precio":round(precio,2),
+                                "contenido":float(contenido),"unidad_contenido":unidad,
+                                "presentacion":pres or f"{contenido:g} {unidad}",
+                                "fuente_precio":href,"tienda":tienda,
+                                "metodo_verificacion":"resultado web de página oficial"})
+                    if len(out)>=max_resultados: return out
+            except Exception:
+                continue
+        if out: return out
+    return out
+
 def _buscar_candidatos_tienda(tienda, ingrediente_base):
     """Obtiene productos/precios actuales de una tienda seleccionada.
 
@@ -1829,6 +1912,15 @@ def _buscar_candidatos_tienda(tienda, ingrediente_base):
         except Exception as exc:
             errores.append(f"descubrimiento: {str(exc)[:70]}")
 
+    # 4) Puente de contingencia: resultados de buscador que apuntan SOLO a la
+    # tienda oficial. Esto evita que un bloqueo de JavaScript deje a KashCook
+    # con cero precios aunque la tienda sí publique el producto y precio.
+    if not candidatos:
+        try:
+            candidatos.extend(_buscar_candidatos_desde_busqueda_web(tienda, ingrediente_base, headers))
+        except Exception as exc:
+            errores.append(f"busqueda web: {str(exc)[:70]}")
+
     # Filtrado final: mismo ingrediente + presentación identificable + precio.
     unicos={}
     for c in candidatos:
@@ -1891,19 +1983,20 @@ def _candidato_compatible_base(candidato, producto_referencia):
     base = producto_referencia.get("ingrediente_base", "")
     consultas = normalizar_texto(CONSULTAS_PRECIO.get(base, base)).split()
     if base == "molida":
-        return "molida" in nombre and "res" in nombre
-    # Exigimos el término principal para no confundir, por ejemplo, salsa de
-    # tomate con tomate fresco.
+        return "molida" in nombre and ("res" in nombre or "carne" in nombre)
     principal = consultas[0] if consultas else base
     aliases = {
-        "atun": ("atun", "atún", "tuny", "dolores"),
+        "atun": ("atun", "atún", "tuny"),
         "camaron": ("camaron", "camarón"),
-        "puerco": ("cerdo", "puerco"),
-        "pescado": ("pescado", "filete", "tilapia", "salmon", "salmón"),
+        "puerco": ("cerdo", "puerco", "chuleta", "pierna de cerdo"),
+        "pescado": ("pescado", "filete", "tilapia", "mojarra", "salmon", "salmón"),
         "arroz": ("arroz",), "frijol": ("frijol",), "tortilla": ("tortilla",),
         "huevo": ("huevo",), "queso": ("queso",), "aceite": ("aceite",),
-        "tomate": ("tomate",), "cebolla": ("cebolla",), "calabaza": ("calabaza", "calabacita"),
-        "papa": ("papa",), "zanahoria": ("zanahoria",), "lechuga": ("lechuga",),
+        "tomate": ("tomate", "jitomate"), "cebolla": ("cebolla",),
+        "calabaza": ("calabaza", "calabacita"), "papa": ("papa",),
+        "zanahoria": ("zanahoria",), "lechuga": ("lechuga",),
+        "pollo": ("pollo",), "res": ("res", "bistec", "carne de res"),
+        "sardina": ("sardina",),
     }
     return any(normalizar_texto(a) in nombre for a in aliases.get(base, (principal,)))
 
@@ -3632,6 +3725,44 @@ PLATOS = [k for k,v in RECETAS_REALES.items() if v["tipo"] in ("Comida","Cena")]
 # Cenas: platos reconocibles y razonables para la noche.
 # NO se usan combinaciones de acompañamientos como "arroz + frijoles + huevo"
 # como si fueran una comida principal.
+
+# ============================================================
+# AMPLIACIÓN DE RECETARIO REAL
+# ============================================================
+# Platillos reconocibles de cocina mexicana e internacional. No se generan
+# nombres improvisados: cada entrada tiene nombre, ingredientes y preparación
+# definida antes de que el motor pueda seleccionarla.
+RECETAS_REALES.update({
+    "enchiladas_pollo_rojas": {"tipo":"Comida","nombre":"Enchiladas rojas de pollo","fuente":"Cocina mexicana tradicional","ingredientes":[("pollo",0.18,"kg"),("tortilla",0.12,"kg"),("tomate",0.15,"kg"),("cebolla",0.03,"kg"),("queso",0.03,"kg"),("aceite",10,"ml")],"pasos":["Cuece el pollo y deshébralo.","Licúa o machaca el tomate con cebolla y cocina la salsa hasta que espese.","Pasa las tortillas por la salsa caliente y rellénalas con pollo.","Enrolla, baña con más salsa y termina con queso y cebolla."]},
+    "tostadas_tinga_pollo": {"tipo":"Comida","nombre":"Tostadas de tinga de pollo","fuente":"Cocina mexicana tradicional","ingredientes":[("pollo",0.18,"kg"),("tortilla",0.12,"kg"),("tomate",0.15,"kg"),("cebolla",0.06,"kg"),("lechuga",0.05,"kg"),("queso",0.02,"kg"),("aceite",10,"ml")],"pasos":["Cuece y deshebra el pollo.","Sofríe cebolla, agrega tomate licuado y cocina hasta obtener una salsa espesa.","Incorpora el pollo y cocina hasta que tome el sabor del guiso.","Sirve sobre tostadas con lechuga y queso."]},
+    "tacos_carne_asada": {"tipo":"Comida","nombre":"Tacos de carne asada","fuente":"Cocina mexicana tradicional","ingredientes":[("res",0.18,"kg"),("tortilla",0.15,"kg"),("cebolla",0.04,"kg"),("tomate",0.05,"kg"),("aceite",8,"ml")],"pasos":["Corta la carne en tiras y sazona.","Cocina la carne en sartén o parrilla hasta el punto deseado.","Calienta las tortillas.","Sirve la carne en tortillas con cebolla y tomate picados."]},
+    "fajitas_pollo": {"tipo":"Comida","nombre":"Fajitas de pollo con cebolla y tomate","fuente":"Cocina mexicana/cocina tex-mex","ingredientes":[("pollo",0.20,"kg"),("cebolla",0.06,"kg"),("tomate",0.10,"kg"),("tortilla",0.12,"kg"),("aceite",10,"ml")],"pasos":["Corta el pollo en tiras y sazona.","Saltea el pollo en aceite hasta que esté cocido.","Agrega cebolla y tomate y cocina hasta que queden tiernos.","Sirve con tortillas calientes."]},
+    "caldo_pollo_papa_zanahoria": {"tipo":"Comida","nombre":"Caldo de pollo con papa y zanahoria","fuente":"Cocina mexicana tradicional","ingredientes":[("pollo",0.25,"kg"),("papa",0.18,"kg"),("zanahoria",0.10,"kg"),("tomate",0.08,"kg"),("cebolla",0.04,"kg")],"pasos":["Cuece el pollo en agua con cebolla.","Agrega papa y zanahoria en trozos.","Incorpora tomate licuado o picado y deja hervir hasta que las verduras estén suaves.","Ajusta la sazón y sirve caliente con el pollo."]},
+    "sopa_tortilla": {"tipo":"Comida","nombre":"Sopa de tortilla","fuente":"Cocina mexicana tradicional","ingredientes":[("tortilla",0.12,"kg"),("tomate",0.18,"kg"),("cebolla",0.03,"kg"),("queso",0.03,"kg"),("aceite",10,"ml")],"pasos":["Corta las tortillas en tiras y dóralas en sartén.","Licúa tomate con cebolla y cocina la salsa con agua o caldo.","Hierve unos minutos hasta integrar los sabores.","Sirve con las tiras de tortilla y queso."]},
+    "carne_deshebrada_tomate": {"tipo":"Comida","nombre":"Carne de res deshebrada en salsa de tomate","fuente":"Cocina mexicana tradicional","ingredientes":[("res",0.20,"kg"),("tomate",0.16,"kg"),("cebolla",0.05,"kg"),("papa",0.12,"kg"),("aceite",10,"ml")],"pasos":["Cuece la carne hasta que pueda deshebrarse y deshébrala.","Sofríe cebolla y agrega tomate licuado.","Incorpora papa en cubos y cocina hasta que esté tierna.","Agrega la carne y deja hervir hasta espesar."]},
+    "enchiladas_suizas_pollo": {"tipo":"Comida","nombre":"Enchiladas suizas de pollo","fuente":"Cocina mexicana","ingredientes":[("pollo",0.18,"kg"),("tortilla",0.12,"kg"),("queso",0.06,"kg"),("cebolla",0.03,"kg"),("aceite",8,"ml")],"pasos":["Cuece y deshebra el pollo.","Calienta las tortillas y rellénalas con pollo.","Acomoda las enchiladas en un refractario, cubre con salsa cremosa y queso.","Hornea o gratina hasta que el queso se derrita."]},
+    "tacos_pescado": {"tipo":"Comida","nombre":"Tacos de pescado","fuente":"Cocina mexicana","ingredientes":[("pescado",0.20,"kg"),("tortilla",0.15,"kg"),("tomate",0.06,"kg"),("cebolla",0.04,"kg"),("lechuga",0.05,"kg"),("aceite",10,"ml")],"pasos":["Corta el pescado en porciones y sazona.","Cocínalo en sartén con poco aceite hasta que esté bien hecho.","Calienta las tortillas.","Sirve el pescado con lechuga, tomate y cebolla."]},
+    "pescado_ajo": {"tipo":"Comida","nombre":"Filete de pescado al ajo","fuente":"Cocina casera","ingredientes":[("pescado",0.20,"kg"),("cebolla",0.03,"kg"),("tomate",0.06,"kg"),("aceite",12,"ml")],"pasos":["Sazona los filetes.","Calienta aceite y cocina el pescado por ambos lados.","Agrega cebolla y tomate picados y cocina hasta suavizar.","Sirve caliente con la salsa de la sartén."]},
+    "cerdo_adobado": {"tipo":"Comida","nombre":"Cerdo adobado con papa","fuente":"Cocina mexicana","ingredientes":[("cerdo",0.20,"kg"),("papa",0.18,"kg"),("tomate",0.12,"kg"),("cebolla",0.04,"kg"),("aceite",10,"ml")],"pasos":["Corta el cerdo en cubos y dóralo.","Agrega papa y cebolla y cocina unos minutos.","Añade tomate licuado y especias de cocina.","Tapa y cocina hasta que el cerdo y la papa estén tiernos."]},
+    "chuletas_puerco_tomate": {"tipo":"Comida","nombre":"Chuletas de cerdo en salsa de tomate","fuente":"Cocina casera mexicana","ingredientes":[("cerdo",0.20,"kg"),("tomate",0.16,"kg"),("cebolla",0.04,"kg"),("papa",0.12,"kg"),("aceite",10,"ml")],"pasos":["Dora las chuletas por ambos lados.","Prepara una salsa con tomate y cebolla.","Agrega papa en cubos y cocina hasta suavizar.","Regresa las chuletas a la salsa y termina la cocción."]},
+    "camaron_ajo": {"tipo":"Comida","nombre":"Camarones al ajillo","fuente":"Cocina mexicana","ingredientes":[("camaron",0.20,"kg"),("cebolla",0.03,"kg"),("tomate",0.06,"kg"),("aceite",15,"ml")],"pasos":["Limpia y seca los camarones.","Calienta aceite y sofríe cebolla y ajo.","Agrega los camarones y cocina hasta que cambien de color.","Incorpora tomate picado y cocina brevemente."]},
+    "arroz_frito_polllo": {"tipo":"Comida","nombre":"Arroz frito con pollo y verduras","fuente":"Cocina asiática","ingredientes":[("arroz",0.10,"kg"),("pollo",0.16,"kg"),("huevo",1,"pieza"),("zanahoria",0.06,"kg"),("cebolla",0.04,"kg"),("aceite",12,"ml")],"pasos":["Cocina previamente el arroz y déjalo enfriar.","Saltea el pollo en aceite hasta cocinarlo.","Agrega cebolla, zanahoria y huevo y mueve hasta integrar.","Incorpora el arroz y saltea a fuego alto con salsa de soya al gusto."]},
+    "pollo_teriyaki": {"tipo":"Comida","nombre":"Pollo teriyaki con arroz","fuente":"Cocina japonesa","ingredientes":[("pollo",0.20,"kg"),("arroz",0.10,"kg"),("cebolla",0.03,"kg"),("aceite",8,"ml")],"pasos":["Corta el pollo en trozos y dóralo.","Agrega la salsa teriyaki y cocina hasta que glasee el pollo.","Prepara el arroz por separado.","Sirve el pollo sobre el arroz."]},
+    "oyakodon": {"tipo":"Comida","nombre":"Oyakodon japonés","fuente":"Cocina japonesa","ingredientes":[("pollo",0.16,"kg"),("huevo",2,"pieza"),("arroz",0.10,"kg"),("cebolla",0.06,"kg")],"pasos":["Cocina la cebolla con caldo y salsa de soya.","Agrega el pollo en tiras y cocina hasta que esté hecho.","Vierte el huevo batido y cocina hasta que cuaje ligeramente.","Sirve sobre arroz caliente."]},
+    "bulgogi_res": {"tipo":"Comida","nombre":"Bulgogi de res","fuente":"Cocina coreana","ingredientes":[("res",0.20,"kg"),("cebolla",0.06,"kg"),("zanahoria",0.06,"kg"),("arroz",0.10,"kg"),("aceite",8,"ml")],"pasos":["Corta la carne en láminas delgadas.","Marina con salsa de soya, ajo y un toque de azúcar.","Saltea la carne con cebolla y zanahoria a fuego alto.","Sirve con arroz blanco."]},
+    "pescado_mediterraneo": {"tipo":"Comida","nombre":"Pescado mediterráneo con tomate y cebolla","fuente":"Cocina mediterránea","ingredientes":[("pescado",0.20,"kg"),("tomate",0.16,"kg"),("cebolla",0.05,"kg"),("aceite",12,"ml")],"pasos":["Coloca los filetes en una sartén con aceite.","Agrega tomate y cebolla en trozos.","Sazona con hierbas y cocina tapado hasta que el pescado esté listo.","Sirve con la salsa de tomate y cebolla."]},
+    "shakshuka_comida": {"tipo":"Comida","nombre":"Shakshuka","fuente":"Cocina del norte de África y Medio Oriente","ingredientes":[("huevo",2,"pieza"),("tomate",0.20,"kg"),("cebolla",0.05,"kg"),("aceite",10,"ml"),("queso",0.03,"kg")],"pasos":["Sofríe la cebolla en aceite.","Agrega tomate picado y cocina hasta formar una salsa espesa.","Haz pequeños huecos y coloca los huevos.","Tapa y cocina hasta que las claras cuajen; termina con queso."]},
+    "tortilla_espanola_comida": {"tipo":"Comida","nombre":"Tortilla española de papa y cebolla","fuente":"Cocina española","ingredientes":[("papa",0.25,"kg"),("huevo",3,"pieza"),("cebolla",0.06,"kg"),("aceite",20,"ml")],"pasos":["Corta papa y cebolla en rebanadas delgadas.","Cocínalas lentamente en aceite hasta que estén tiernas.","Mezcla con huevo batido y devuelve a la sartén.","Cuaja por ambos lados y sirve en porciones."]},
+    "frittata_verduras": {"tipo":"Comida","nombre":"Frittata de papa, cebolla y queso","fuente":"Cocina italiana","ingredientes":[("huevo",3,"pieza"),("papa",0.18,"kg"),("cebolla",0.05,"kg"),("queso",0.04,"kg"),("aceite",10,"ml")],"pasos":["Cocina la papa y la cebolla en sartén.","Bate los huevos y mezcla con el queso.","Vierte la mezcla sobre las verduras y cocina a fuego bajo.","Termina en horno o tapada hasta cuajar completamente."]},
+    "ensalada_tibia_pollo": {"tipo":"Cena","nombre":"Ensalada tibia de pollo y verduras","fuente":"Cocina casera","ingredientes":[("pollo",0.16,"kg"),("lechuga",0.08,"kg"),("zanahoria",0.06,"kg"),("tomate",0.08,"kg"),("cebolla",0.03,"kg")],"pasos":["Cocina el pollo en tiras y córtalo en porciones.","Lava y corta las verduras.","Mezcla la lechuga con zanahoria, tomate y cebolla.","Agrega el pollo caliente y adereza al gusto."]},
+    "quesadillas_pollo": {"tipo":"Cena","nombre":"Quesadillas de pollo y queso","fuente":"Cocina mexicana","ingredientes":[("pollo",0.12,"kg"),("tortilla",0.12,"kg"),("queso",0.06,"kg"),("cebolla",0.03,"kg")],"pasos":["Cuece y deshebra el pollo.","Rellena las tortillas con pollo, queso y cebolla.","Cocina las quesadillas en comal por ambos lados.","Sirve calientes."]},
+    "tostadas_atun": {"tipo":"Cena","nombre":"Tostadas de atún a la mexicana","fuente":"Cocina mexicana","ingredientes":[("atun",0.14,"kg"),("tortilla",0.12,"kg"),("tomate",0.08,"kg"),("cebolla",0.04,"kg"),("lechuga",0.05,"kg")],"pasos":["Escurre el atún.","Mézclalo con tomate y cebolla picados.","Dora las tortillas hasta formar tostadas.","Sirve el atún sobre las tostadas con lechuga."]},
+    "tacos_res_cebolla_cena": {"tipo":"Cena","nombre":"Tacos de res con cebolla","fuente":"Cocina mexicana","ingredientes":[("res",0.16,"kg"),("tortilla",0.12,"kg"),("cebolla",0.05,"kg"),("tomate",0.05,"kg")],"pasos":["Corta la carne en tiras y sazona.","Cocina la carne en sartén caliente.","Agrega cebolla y cocina hasta dorar.","Sirve en tortillas calientes con tomate."]},
+    "pescado_plancha_cena": {"tipo":"Cena","nombre":"Filete de pescado a la plancha con ensalada","fuente":"Cocina casera","ingredientes":[("pescado",0.18,"kg"),("lechuga",0.08,"kg"),("tomate",0.08,"kg"),("cebolla",0.03,"kg"),("aceite",8,"ml")],"pasos":["Sazona el filete.","Cocínalo a la plancha con poco aceite por ambos lados.","Prepara la ensalada con lechuga, tomate y cebolla.","Sirve el pescado junto con la ensalada."]},
+    "caldo_pollo_cena": {"tipo":"Cena","nombre":"Caldo de pollo con verduras","fuente":"Cocina mexicana tradicional","ingredientes":[("pollo",0.18,"kg"),("papa",0.12,"kg"),("zanahoria",0.08,"kg"),("tomate",0.06,"kg"),("cebolla",0.03,"kg")],"pasos":["Cuece el pollo con cebolla.","Agrega papa y zanahoria.","Incorpora tomate y deja hervir hasta que las verduras estén tiernas.","Sirve caliente con el pollo."]},
+    "sopa_tortilla_cena": {"tipo":"Cena","nombre":"Sopa de tortilla","fuente":"Cocina mexicana tradicional","ingredientes":[("tortilla",0.10,"kg"),("tomate",0.16,"kg"),("cebolla",0.03,"kg"),("queso",0.03,"kg"),("aceite",8,"ml")],"pasos":["Corta y dora las tortillas.","Prepara una salsa de tomate y cebolla y agrega caldo.","Hierve unos minutos.","Sirve con las tiras de tortilla y queso."]},
+})
+
 CENAS_SENCILLAS_TRADICIONALES = {
     "calabacitas_queso", "enchiladas_queso", "tacos_atun",
     "sardinas_papa", "ensalada_atun_papa", "atun_bolitas",
@@ -3908,6 +4039,21 @@ def _generar_plan_local(
         raise ValueError("No hay desayunos reales compatibles con los estilos, tiendas y restricciones seleccionados.")
     if not candidatos_pl and any(x in comidas for x in ("Comida", "Cena")):
         raise ValueError("No hay comidas/cenas reales compatibles con los estilos, tiendas y restricciones seleccionados.")
+
+    # Comida principal: solo platillos reconocibles y completos. Nunca usamos
+    # combinaciones de guarniciones como arroz+frijoles+huevo para ocupar el
+    # lugar de una comida.
+    nombres_no_comida = {
+        "arroz con frijoles y queso fresco", "plato de frijoles, arroz y huevo",
+        "arroz con huevo a la mexicana", "huevos estrellados con arroz y frijoles",
+        "frijoles con huevo y queso sobre tortilla dorada",
+        "calabacitas guisadas con queso y arroz",
+    }
+    candidatos_pl = [r for r in candidatos_pl if normalizar_texto(r.get("nombre", "")) not in {normalizar_texto(x) for x in nombres_no_comida}]
+    # Una comida fuerte debe tener al menos una fuente proteica o ser un platillo
+    # tradicional completo (pasta, enchiladas, tacos, pizza, etc.).
+    palabras_plato = ("pollo","res","cerdo","pescado","atun","sardina","camaron","huevo","queso","tinga","enchilada","taco","albóndiga","pasta","pizza","lasaña","curry","fajita","milanesa")
+    candidatos_pl = [r for r in candidatos_pl if any(w in normalizar_texto(r.get("nombre", "")) for w in palabras_plato)]
 
     pools = {"Desayuno": candidatos_des, "Comida": candidatos_pl, "Cena": candidatos_cena}
     if not candidatos_cena and "Cena" in comidas:
