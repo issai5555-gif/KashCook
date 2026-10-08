@@ -7,6 +7,7 @@ import copy
 import time
 from datetime import datetime
 from urllib.parse import quote_plus
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import requests
 from bs4 import BeautifulSoup
@@ -1459,22 +1460,32 @@ def _extraer_candidatos_oficiales(html_text, query, tienda, pagina_url):
 
 
 def _buscar_candidatos_tienda(tienda, ingrediente_base):
+    """Busca candidatos reales de una tienda con una estrategia rápida.
+
+    Usa primero una sola URL de búsqueda. Solo intenta una alternativa si la
+    primera no devuelve productos. Los resultados quedan cacheados para no
+    volver a consultar la misma combinación durante la sesión.
+    """
     consulta = CONSULTAS_PRECIO.get(ingrediente_base, ingrediente_base.replace("_", " "))
     clave = ("candidatos", tienda, ingrediente_base)
     ahora = time.time()
     cache = PRECIO_CACHE.get(clave)
     if cache and ahora - cache["ts"] < PRECIO_CACHE_TTL:
         return cache["resultado"]
+
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/154 Safari/537.36",
         "Accept-Language": "es-MX,es;q=0.9,en;q=0.8",
+        "Accept": "text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8",
     }
     candidatos = []
     errores = []
-    for plantilla in BUSQUEDAS_TIENDA.get(tienda, []):
+    plantillas = BUSQUEDAS_TIENDA.get(tienda, [])
+    # Primera URL: rápida. Segunda URL: solo como respaldo.
+    for plantilla in plantillas[:2]:
         url = plantilla.format(q=quote_plus(consulta))
         try:
-            r = requests.get(url, headers=headers, timeout=9, allow_redirects=True)
+            r = requests.get(url, headers=headers, timeout=4.5, allow_redirects=True)
             dominio = DOMINIOS_OFICIALES[tienda]
             if r.status_code != 200 or dominio not in r.url:
                 errores.append(f"HTTP {r.status_code}")
@@ -1486,21 +1497,54 @@ def _buscar_candidatos_tienda(tienda, ingrediente_base):
             errores.append("sin productos identificables")
         except Exception as exc:
             errores.append(str(exc)[:80])
-    # Deduplicar y ordenar por costo normalizado cuando hay presentación.
+
     unicos = {}
     for c in candidatos:
         clave_c = (normalizar_texto(c["nombre"]), c["contenido"], c["unidad_contenido"])
         anterior = unicos.get(clave_c)
         if anterior is None or c["precio"] < anterior["precio"]:
             unicos[clave_c] = c
+
     resultado = {
         "candidatos": sorted(unicos.values(), key=lambda x: x["precio"]),
         "ultima_verificacion": datetime.now().astimezone().isoformat(timespec="minutes"),
-        "fuente": unicos and next(iter(unicos.values())).get("fuente_precio", DOMINIOS_OFICIALES.get(tienda, "")) or DOMINIOS_OFICIALES.get(tienda, ""),
+        "fuente": (next(iter(unicos.values())).get("fuente_precio", DOMINIOS_OFICIALES.get(tienda, ""))
+                   if unicos else DOMINIOS_OFICIALES.get(tienda, "")),
         "error": "; ".join(errores[-2:]),
     }
     PRECIO_CACHE[clave] = {"ts": ahora, "resultado": resultado}
     return resultado
+
+
+def _buscar_candidatos_lote(tareas, max_workers=12):
+    """Consulta tienda+ingrediente en paralelo para evitar esperas acumuladas."""
+    resultados = {}
+    pendientes = []
+    for tienda, base in tareas:
+        clave = (tienda, base)
+        cache = PRECIO_CACHE.get(("candidatos", tienda, base))
+        if cache and time.time() - cache["ts"] < PRECIO_CACHE_TTL:
+            resultados[clave] = cache["resultado"]
+        else:
+            pendientes.append((tienda, base))
+
+    if pendientes:
+        workers = min(max_workers, len(pendientes))
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            futuros = {executor.submit(_buscar_candidatos_tienda, tienda, base): (tienda, base)
+                       for tienda, base in pendientes}
+            for futuro in as_completed(futuros):
+                tienda, base = futuros[futuro]
+                try:
+                    resultados[(tienda, base)] = futuro.result()
+                except Exception as exc:
+                    resultados[(tienda, base)] = {
+                        "candidatos": [],
+                        "ultima_verificacion": datetime.now().astimezone().isoformat(timespec="minutes"),
+                        "fuente": DOMINIOS_OFICIALES.get(tienda, ""),
+                        "error": str(exc)[:120],
+                    }
+    return resultados
 
 
 def _candidato_compatible_base(candidato, producto_referencia):
@@ -1522,44 +1566,53 @@ def _candidato_compatible_base(candidato, producto_referencia):
     return any(normalizar_texto(a) in nombre for a in aliases.get(base, (principal,)))
 
 
-def construir_catalogo_productos_optimo(catalogo, bases_necesarias, presupuesto):
-    """Busca varias marcas/presentaciones reales y arma el catálogo económico.
+def construir_catalogo_productos_optimo(catalogo, bases_necesarias=None, presupuesto=0):
+    """Construye un catálogo con productos reales y múltiples marcas.
 
-    El precio más bajo compatible es el punto de partida. Si el presupuesto deja
-    margen, no obliga a comprar siempre la opción más barata: conserva una
-    alternativa mejor valorada cuando el costo adicional es pequeño. Así el
-    sistema funciona tanto para presupuestos muy bajos como holgados.
+    La búsqueda se hace para todas las bases útiles del catálogo (o solo para
+    las solicitadas) y en paralelo por tienda+ingrediente. Así KashCook puede
+    descubrir marcas propias/económicas como MiMarca sin multiplicar el tiempo
+    de espera por cada ingrediente.
     """
     resultado = []
     por_base = {}
     for p in catalogo:
         por_base.setdefault(p.get("ingrediente_base"), []).append(p)
-    for base in bases_necesarias:
+
+    bases = sorted({b for b in (bases_necesarias or por_base.keys()) if b in por_base})
+    tiendas = sorted({p.get("tienda") for p in catalogo if p.get("tienda")})
+    tareas = [(tienda, base) for tienda in tiendas for base in bases]
+    resultados_lote = _buscar_candidatos_lote(tareas, max_workers=12)
+
+    for base in bases:
         referencias = por_base.get(base, [])
-        if not referencias:
-            continue
         candidatos = []
-        for tienda in sorted({p.get("tienda") for p in referencias if p.get("tienda")}):
-            res = _buscar_candidatos_tienda(tienda, base)
+        for tienda in tiendas:
+            res = resultados_lote.get((tienda, base), {})
             for c in res.get("candidatos", []):
-                ref = next((x for x in referencias if x.get("tienda") == tienda and _candidato_compatible_base(c, x)), None)
-                if ref:
-                    cc = copy.deepcopy(ref)
-                    cc["id"] = f"{ref['id']}__live"
-                    cc["nombre"] = c["nombre"]
-                    cc["marca"] = c.get("marca", "Marca no identificada")
-                    cc["precio"] = float(c["precio"])
-                    cc["contenido"] = float(c["contenido"])
-                    cc["unidad_contenido"] = c["unidad_contenido"]
-                    cc["presentacion"] = c["presentacion"]
-                    cc["estado_precio"] = "Verificado"
-                    cc["ultima_verificacion"] = res["ultima_verificacion"]
-                    cc["fuente_precio"] = c["fuente_precio"]
-                    cc["venta_por_kg"] = c["unidad_contenido"] == "kg" and base in {"pollo","res","molida","puerco","pescado","camaron","papa","tomate","cebolla","zanahoria","lechuga","calabaza"}
-                    candidatos.append(cc)
+                ref = next((x for x in referencias
+                            if x.get("tienda") == tienda and _candidato_compatible_base(c, x)), None)
+                if not ref:
+                    continue
+                cc = copy.deepcopy(ref)
+                cc["id"] = f"{ref['id']}__live__{abs(hash((c['nombre'], c['precio'], c['contenido'], c['unidad_contenido']))) % 10**9}"
+                cc["nombre"] = c["nombre"]
+                cc["marca"] = c.get("marca", "Marca no identificada")
+                cc["precio"] = float(c["precio"])
+                cc["contenido"] = float(c["contenido"])
+                cc["unidad_contenido"] = c["unidad_contenido"]
+                cc["presentacion"] = c["presentacion"]
+                cc["estado_precio"] = "Verificado"
+                cc["ultima_verificacion"] = res.get("ultima_verificacion")
+                cc["fuente_precio"] = c.get("fuente_precio", "")
+                cc["venta_por_kg"] = cc["unidad_contenido"] == "kg" and base in {
+                    "pollo","res","molida","puerco","pescado","camaron","papa","tomate","cebolla","zanahoria","lechuga","calabaza"
+                }
+                candidatos.append(cc)
+
         if candidatos:
-            # Costo efectivo por unidad base; para productos por pieza/paquete
-            # se conserva el costo de compra real y la presentación comercial.
+            # Mantener suficientes alternativas para que el cálculo final pueda
+            # elegir entre marca propia, marca económica y marca conocida.
             def costo_efectivo(x):
                 contenido = max(float(x.get("contenido") or 1), 1e-9)
                 unidad = x.get("unidad_contenido")
@@ -1569,19 +1622,16 @@ def construir_catalogo_productos_optimo(catalogo, bases_necesarias, presupuesto)
                 if unidad == "ml": return x["precio"] / (contenido / 1000)
                 return x["precio"]
             candidatos.sort(key=lambda x: (costo_efectivo(x), x["precio"]))
-            # Conservamos las mejores opciones por base para que la UI pueda
-            # mostrar la marca elegida y el motor pueda cambiar de presentación
-            # sin perder la trazabilidad.
-            resultado.extend(candidatos[:8])
+            # 10 opciones por ingrediente son suficientes para comparar marcas
+            # sin inflar el catálogo ni ralentizar el motor de menús.
+            resultado.extend(candidatos[:10])
         else:
-            # No inventamos productos. Se dejan las referencias como no verificadas;
-            # el validador final impedirá presentar un total como real.
-            resultado.extend(copy.deepcopy(referencias))
-    # Bases no necesarias se conservan para que la estructura de recetas no se rompa.
-    usadas = {p.get("ingrediente_base") for p in resultado}
-    for p in catalogo:
-        if p.get("ingrediente_base") not in usadas:
-            resultado.append(copy.deepcopy(p))
+            # No introducimos precios de referencia en el catálogo optimizado.
+            # Si una tienda no permite verificar una base, esa base queda fuera
+            # de las recetas disponibles para esta consulta; así nunca se mezcla
+            # una marca/precio inventado con los productos reales.
+            continue
+
     return resultado
 
 def verificar_precios_tiendas(catalogo, bases_necesarias=None, ids_necesarios=None):
@@ -3785,75 +3835,59 @@ if generar_menu:
     if not catalogo:
         st.error("No hay productos disponibles para las tiendas seleccionadas.")
         st.stop()
-    with st.spinner("KashCook está construyendo el menú, verificando recetas, cantidades y precios actuales..."):
+    with st.spinner("KashCook está buscando productos, comparando marcas y construyendo el menú más económico posible..."):
         try:
-            # PRIMERA PASADA: solo para saber qué ingredientes necesita un menú real.
-            # No usamos esta pasada para presentar precios al usuario. Se permite
-            # un presupuesto amplio porque todavía estamos usando precios de referencia.
-            presupuesto_exploracion=max(float(presupuesto), 100000.0)
-            plan_previo,total_ref=generar_plan_seguro(
-                dias=int(dias), personas=int(personas), presupuesto=presupuesto_exploracion,
-                comidas=comidas, catalogo=catalogo, estilos=estilos,
-                electrodomesticos=electrodomesticos, restricciones=restricciones
-            )
-            bases_necesarias={
-                ing.get("ingrediente_base") or next((x.get("ingrediente_base") for x in catalogo if x.get("id")==ing.get("producto_id")), None)
-                for dia in plan_previo.get("dias",[])
-                for comida in dia.get("comidas",[])
-                for ing in comida.get("ingredientes",[])
-                if ing.get("producto_id")
-            }
-            bases_necesarias.discard(None)
-
-            # SEGUNDA PASADA: buscamos múltiples productos reales por ingrediente,
-            # comparamos marcas/presentaciones y construimos un catálogo optimizado.
-            # Esto permite que MiMarca, Great Value, Aurrera, etc. ganen cuando son
-            # más económicas, sin alterar la receta ni las porciones.
-            catalogo_optimizado=construir_catalogo_productos_optimo(
-                catalogo, bases_necesarias, float(presupuesto)
+            # Una sola fase de precios: se buscan en paralelo los productos de
+            # todas las bases necesarias. Así evitamos la antigua secuencia
+            # menú → buscar precios → volver a generar menú → volver a verificar.
+            # El motor puede elegir desde el principio entre marcas propias,
+            # económicas y conocidas.
+            catalogo_optimizado = construir_catalogo_productos_optimo(
+                catalogo, bases_necesarias=None, presupuesto=float(presupuesto)
             )
 
-            # TERCERA PASADA: ahora sí construimos el menú usando los productos
-            # verificados y sus costos reales. El motor puede escoger otra receta
-            # si la combinación actual no entra en el presupuesto.
-            plan,total_ref=generar_plan_seguro(
+            plan, total_ref = generar_plan_seguro(
                 dias=int(dias), personas=int(personas), presupuesto=float(presupuesto),
                 comidas=comidas, catalogo=catalogo_optimizado, estilos=estilos,
                 electrodomesticos=electrodomesticos, restricciones=restricciones
             )
 
-            ids_necesarios={
+            # El menú ya se construyó usando productos verificados siempre que
+            # estuvieron disponibles. Validamos una última vez solo los productos
+            # realmente comprados; no hacemos nuevas búsquedas web aquí.
+            ids_necesarios = {
                 ing.get("producto_id")
-                for dia in plan.get("dias",[])
-                for comida in dia.get("comidas",[])
-                for ing in comida.get("ingredientes",[])
+                for dia in plan.get("dias", [])
+                for comida in dia.get("comidas", [])
+                for ing in comida.get("ingredientes", [])
                 if ing.get("producto_id")
             }
-            bases_finales={
-                p.get("ingrediente_base")
-                for p in catalogo_optimizado
-                if p.get("id") in ids_necesarios
-            }
-            catalogo_verificado=verificar_precios_tiendas(catalogo_optimizado,bases_finales,ids_necesarios)
-            compra,total=calcular_compra(plan,catalogo_verificado,personas)
+            catalogo_verificado = verificar_precios_tiendas(
+                catalogo_optimizado,
+                {p.get("ingrediente_base") for p in catalogo_optimizado if p.get("id") in ids_necesarios},
+                ids_necesarios
+            )
+            compra, total = calcular_compra(plan, catalogo_verificado, personas)
             validar_precios_verificados(compra)
+
             if total > float(presupuesto) + TOLERANCIA_PRESUPUESTO:
                 raise ValueError(
                     f"Con los precios verificados hoy, la compra completa cuesta ${total:,.2f}; "
                     f"el presupuesto es ${float(presupuesto):,.2f}. KashCook no reducirá porciones ni sustituirá precios reales para aparentar que alcanza."
                 )
 
-            st.session_state["plan"]=plan
-            st.session_state["compra"]=compra
-            st.session_state["total"]=total
-            st.session_state["catalogo_verificado"]=catalogo_verificado
-            st.session_state["presupuesto"]=presupuesto
-            st.session_state["personas"]=personas
-            st.session_state["tiendas"]=tiendas_seleccionadas
-            st.session_state["precios_verificados_en"]=datetime.now().astimezone().isoformat(timespec="minutes")
-            st.success("Plan generado con recetas reales, porciones escaladas y precios verificados en la consulta.")
+            st.session_state["plan"] = plan
+            st.session_state["compra"] = compra
+            st.session_state["total"] = total
+            st.session_state["catalogo_verificado"] = catalogo_verificado
+            st.session_state["presupuesto"] = presupuesto
+            st.session_state["personas"] = personas
+            st.session_state["tiendas"] = tiendas_seleccionadas
+            st.session_state["precios_verificados_en"] = datetime.now().astimezone().isoformat(timespec="minutes")
+            st.success("Plan generado con recetas reales, porciones escaladas y productos/marcas verificados en la consulta.")
         except Exception as e:
             st.error(f"Ocurrió un error al generar el plan: {e}")
+
 
 # ============================================================
 # RESULTADO — dashboard visual restaurado
