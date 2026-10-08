@@ -1610,65 +1610,101 @@ def construir_catalogo_productos_optimo(catalogo, bases_necesarias=None, presupu
                 }
                 candidatos.append(cc)
 
-        if candidatos:
-            # Mantener suficientes alternativas para que el cálculo final pueda
-            # elegir entre marca propia, marca económica y marca conocida.
-            def costo_efectivo(x):
-                contenido = max(float(x.get("contenido") or 1), 1e-9)
-                unidad = x.get("unidad_contenido")
-                if unidad == "kg": return x["precio"] / contenido
-                if unidad == "g": return x["precio"] / (contenido / 1000)
-                if unidad == "l": return x["precio"] / contenido
-                if unidad == "ml": return x["precio"] / (contenido / 1000)
-                return x["precio"]
-            candidatos.sort(key=lambda x: (costo_efectivo(x), x["precio"]))
-            # 10 opciones por ingrediente son suficientes para comparar marcas
-            # sin inflar el catálogo ni ralentizar el motor de menús.
-            resultado.extend(candidatos[:10])
-        else:
-            # No introducimos precios de referencia en el catálogo optimizado.
-            # Si una tienda no permite verificar una base, esa base queda fuera
-            # de las recetas disponibles para esta consulta; así nunca se mezcla
-            # una marca/precio inventado con los productos reales.
-            continue
+        # SIEMPRE conservamos el producto de referencia como respaldo de
+        # planificación. Esto evita el falso mensaje "no hay desayunos/comidas"
+        # cuando una página del supermercado falla, cambia su HTML o bloquea una
+        # consulta. Los precios de referencia jamás se usan como total final.
+        ids_live = {p.get("id") for p in candidatos}
+        for ref in referencias:
+            if ref.get("id") not in ids_live:
+                rr = copy.deepcopy(ref)
+                rr["estado_precio"] = "Referencia"
+                candidatos.append(rr)
+
+        def costo_efectivo(x):
+            contenido = max(float(x.get("contenido") or 1), 1e-9)
+            unidad = x.get("unidad_contenido")
+            try: precio=float(x.get("precio") or 10**9)
+            except Exception: precio=10**9
+            if unidad == "kg": return precio / contenido
+            if unidad == "g": return precio / (contenido / 1000)
+            if unidad == "l": return precio / contenido
+            if unidad == "ml": return precio / (contenido / 1000)
+            return precio
+
+        # Primero verificadas y luego referencias; dentro de cada grupo, menor
+        # costo efectivo. Así las marcas propias tienen oportunidad de ganar sin
+        # hacer que una falla del buscador elimine recetas enteras.
+        candidatos.sort(key=lambda x: (0 if x.get("estado_precio")=="Verificado" else 1, costo_efectivo(x)))
+        resultado.extend(candidatos[:12])
 
     return resultado
 
 def verificar_precios_tiendas(catalogo, bases_necesarias=None, ids_necesarios=None):
-    """Verifica solo los ingredientes/productos que realmente requiere el plan.
+    """Conserva solo verificaciones realmente asociadas a productos concretos.
 
-    Devuelve una copia del catálogo. Ningún precio de referencia se convierte
-    en precio verificado por defecto. Si un producto no se puede verificar,
-    queda marcado como no disponible.
+    Los productos de referencia sirven para planificar, pero NO se convierten en
+    productos verificados mediante una búsqueda genérica. Los productos __live__
+    ya contienen marca, presentación, precio y fuente obtenidos del supermercado.
     """
-    bases = set(bases_necesarias or [p.get("ingrediente_base") for p in catalogo])
-    ids = set(ids_necesarios or [p.get("id") for p in catalogo])
+    ids = set(ids_necesarios or [])
+    bases = set(bases_necesarias or [])
     actualizado = copy.deepcopy(catalogo)
     for p in actualizado:
-        base = p.get("ingrediente_base")
-        if p.get("id") not in ids or base not in bases:
+        if p.get("id") not in ids or (bases and p.get("ingrediente_base") not in bases):
             continue
-        # Los candidatos __live ya fueron obtenidos desde la ficha/búsqueda oficial
-        # y tienen precio, marca, presentación, fuente y hora de verificación.
-        # No los reemplazamos por el primer precio genérico de la página de búsqueda.
-        if str(p.get("id", "")).endswith("__live") and p.get("estado_precio") == "Verificado":
+        if str(p.get("id", "")).find("__live__") >= 0 and p.get("estado_precio") == "Verificado":
             continue
-        resultado = _consultar_precio_tienda(p.get("tienda"), base)
-        if resultado.get("precio") is not None:
-            # Mantenemos la presentación/contenido del producto catalogado;
-            # solo sustituimos el precio si la consulta oficial lo verificó.
-            p["precio"] = float(resultado["precio"])
-            p["venta_por_kg"] = bool(resultado.get("venta_por_kg", False))
-            if p["venta_por_kg"] and p.get("unidad_contenido") in {"kg", "g"}:
-                p["presentacion"] = f"Venta por kg · {p.get('presentacion','')}"
-            p["estado_precio"] = "Verificado"
-            p["ultima_verificacion"] = resultado["ultima_verificacion"]
-            p["fuente_precio"] = resultado["fuente"]
-        else:
+        # Un producto de referencia no puede recibir un precio genérico y pasar
+        # como marca verificada. Si no existe un candidato __live__, quedará como
+        # no disponible y la validación final lo hará saber al usuario.
+        if p.get("estado_precio") != "Verificado":
             p["estado_precio"] = "No disponible"
-            p["ultima_verificacion"] = resultado["ultima_verificacion"]
-            p["fuente_precio"] = resultado.get("fuente", "")
+            p["ultima_verificacion"] = datetime.now().astimezone().isoformat(timespec="minutes")
+            p["fuente_precio"] = DOMINIOS_OFICIALES.get(p.get("tienda"), "")
     return actualizado
+
+def _reemplazar_productos_por_verificados(plan, catalogo_verificado):
+    """Reasigna cada ingrediente del menú al producto verificado más económico.
+
+    El menú se puede planificar aunque el buscador web haya fallado para alguna
+    página. Antes del total final, cada ingrediente debe quedar ligado a una
+    marca/presentación realmente verificada.
+    """
+    por_base={}
+    for p in catalogo_verificado:
+        if p.get("estado_precio") != "Verificado":
+            continue
+        por_base.setdefault(p.get("ingrediente_base"), []).append(p)
+    nuevo=copy.deepcopy(plan)
+    productos={p.get("id"):p for p in catalogo_verificado}
+    for dia in nuevo.get("dias",[]):
+        for comida in dia.get("comidas",[]):
+            for ing in comida.get("ingredientes",[]):
+                pid=ing.get("producto_id")
+                original=productos.get(pid)
+                base=original.get("ingrediente_base") if original else None
+                if not base:
+                    # Recuperar la base desde el catálogo de referencia por ID.
+                    original_ref=next((p for p in catalogo_verificado if p.get("id")==pid),None)
+                    base=original_ref.get("ingrediente_base") if original_ref else None
+                opciones=por_base.get(base,[])
+                if not opciones:
+                    continue
+                def costo(p):
+                    try: return float(p.get("precio") or 10**9)
+                    except Exception: return 10**9
+                elegido=min(opciones,key=costo)
+                # Si cambia la presentación, recalcular la cantidad expresada en
+                # gramos/kg para ingredientes que originalmente se daban por pieza
+                # y cuya receta depende del contenido comercial.
+                if str(ing.get("unidad","")).lower() in {"pieza","piezas","unidad","unidades"} and str(elegido.get("unidad_contenido","")).lower() in {"g","kg"}:
+                    contenido_g=float(elegido.get("contenido") or 0)*(1000 if str(elegido.get("unidad_contenido")).lower()=="kg" else 1)
+                    if contenido_g>0:
+                        ing["cantidad_por_persona"]=float(ing.get("cantidad_por_persona",0))*contenido_g
+                        ing["unidad"]="g"
+                ing["producto_id"]=elegido["id"]
+    return nuevo
 
 
 def validar_precios_verificados(compra):
@@ -3172,13 +3208,29 @@ DESAYUNOS = [k for k,v in RECETAS_REALES.items() if v["tipo"]=="Desayuno"]
 PLATOS = [k for k,v in RECETAS_REALES.items() if v["tipo"] in ("Comida","Cena")]
 
 def _producto_para_base(base, catalogo):
-    """Selecciona el producto más barato de la tienda seleccionada para un ingrediente."""
+    """Selecciona un producto compatible para planificar.
+
+    IMPORTANTE: la disponibilidad web no decide si existe una receta. Los
+    productos de referencia permiten construir el menú; cuando hay productos
+    verificados, estos tienen prioridad y se elige entre ellos por costo.
+    La validación final exige que los productos realmente comprados estén
+    verificados.
+    """
     candidatos=[p for p in catalogo if p.get("ingrediente_base")==base]
     if base == "molida":
         candidatos=[p for p in catalogo if p.get("ingrediente_base")=="res" and "molida" in str(p.get("nombre","")).lower()]
     if not candidatos:
         return None
-    return min(candidatos,key=lambda p: float(p.get("precio") or 10**9))
+
+    verificados=[p for p in candidatos if p.get("estado_precio")=="Verificado"]
+    pool=verificados or candidatos
+
+    def costo(p):
+        try:
+            return float(p.get("precio") or 10**9)
+        except Exception:
+            return 10**9
+    return min(pool,key=costo)
 
 
 def _receta_a_comida(recipe_id, catalogo, tipo):
@@ -3867,6 +3919,10 @@ if generar_menu:
                 {p.get("ingrediente_base") for p in catalogo_optimizado if p.get("id") in ids_necesarios},
                 ids_necesarios
             )
+            # El buscador web no puede decidir si existe una receta. Ahora sí
+            # reasignamos cada ingrediente del menú a la mejor marca/presentación
+            # que fue verificada en la tienda seleccionada.
+            plan = _reemplazar_productos_por_verificados(plan, catalogo_verificado)
             compra, total = calcular_compra(plan, catalogo_verificado, personas)
             validar_precios_verificados(compra)
 
