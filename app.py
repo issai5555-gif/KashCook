@@ -1470,38 +1470,59 @@ def _extraer_candidatos_lineas(html_text, query, tienda, pagina_url):
     raw_lines = [re.sub(r"\s+", " ", x).strip() for x in soup.stripped_strings]
     lines = [x for x in raw_lines if x]
     tokens = [t for t in normalizar_texto(query).split() if len(t) >= 3]
+    aliases = {
+        "huevo": ("huevo",), "tomate": ("tomate", "jitomate"),
+        "cebolla": ("cebolla",), "aceite": ("aceite",),
+        "pescado": ("pescado", "filete", "tilapia", "salmon", "salmón"),
+        "molida": ("molida", "res"), "frijol": ("frijol",),
+        "tortilla": ("tortilla",), "arroz": ("arroz",),
+        "pollo": ("pollo",), "res": ("res",), "puerco": ("cerdo", "puerco"),
+        "atun": ("atun", "atún"), "sardina": ("sardina",),
+        "camaron": ("camaron", "camarón"), "calabaza": ("calabacita", "calabaza"),
+        "queso": ("queso",), "papa": ("papa",), "zanahoria": ("zanahoria",),
+        "lechuga": ("lechuga",),
+    }
+    alias = aliases.get(normalizar_texto(query).split()[0], tuple(tokens))
     out=[]; seen=set()
     for i,line in enumerate(lines):
-        window=" ".join(lines[max(0,i-2):min(len(lines),i+3)])
-        norm=normalizar_texto(window)
-        if tokens and not any(t in norm for t in tokens):
+        norm_line=normalizar_texto(line)
+        if alias and not any(normalizar_texto(a) in norm_line for a in alias):
             continue
-        pm=re.search(r"\$\s*([0-9]{1,5}(?:[,][0-9]{3})*(?:\.[0-9]{1,2})?)", window)
-        if not pm:
-            continue
-        precio=_precio_float(pm.group(1))
-        if not precio or not (1 <= precio <= 10000):
-            continue
-        contenido,unidad,pres=_inferir_presentacion_producto(window)
-        if not contenido:
-            # Frescos vendidos por peso: solo aceptamos si el propio texto lo indica.
-            if re.search(r"\bpor\s*(kg|kilo|kilogramo)|\b\$/?\s*kg\b", normalizar_texto(window)):
-                contenido,unidad,pres=1.0,"kg","1 kg"
-            else:
+        # Los supermercados suelen separar nombre, presentación y precio en
+        # bloques de varias líneas. Buscamos hasta 10 líneas alrededor del
+        # nombre en lugar de exigir que estén pegadas.
+        for j in range(i, min(len(lines), i+11)):
+            candidate_block=" ".join(lines[i:j+1])
+            pm=re.search(r"(?:precio\s*(?:actual|de venta)?\s*)?\$\s*([0-9]{1,5}(?:[,][0-9]{3})*(?:\.[0-9]{1,2})?)", candidate_block, flags=re.I)
+            if not pm:
                 continue
-        # El nombre suele estar antes del precio; quitamos mensajes de UI.
-        nombre=window[:window.find(pm.group(0))].strip(" -|•:")[-220:]
-        if len(nombre)<4:
-            continue
-        marca=_marca_desde_producto(nombre)
-        key=(normalizar_texto(nombre),round(precio,2),contenido,unidad)
-        if key in seen: continue
-        seen.add(key)
-        out.append({"nombre":nombre,"marca":marca,"precio":round(precio,2),
-                    "contenido":float(contenido),"unidad_contenido":unidad,
-                    "presentacion":pres or f"{contenido:g} {unidad}",
-                    "fuente_precio":pagina_url,"tienda":tienda})
-    return out[:60]
+            precio=_precio_float(pm.group(1))
+            if not precio or not (1 <= precio <= 10000):
+                continue
+            contenido,unidad,pres=_inferir_presentacion_producto(candidate_block)
+            if not contenido:
+                if re.search(r"\bpor\s*(kg|kilo|kilogramo)|\$\s*/?\s*kg\b", normalizar_texto(candidate_block)):
+                    contenido,unidad,pres=1.0,"kg","1 kg"
+                else:
+                    continue
+            # Preferimos como nombre la línea del producto y, si es demasiado
+            # corta, incorporamos la línea de presentación.
+            nombre=line.strip(" -|•:")
+            if len(nombre)<4 or re.fullmatch(r"[0-9$., ]+", nombre):
+                nombre=candidate_block[:candidate_block.find(pm.group(0))].strip(" -|•:")[-220:]
+            if len(nombre)<4:
+                continue
+            marca=_marca_desde_producto(nombre)
+            key=(normalizar_texto(nombre),round(precio,2),contenido,unidad)
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append({"nombre":nombre,"marca":marca,"precio":round(precio,2),
+                        "contenido":float(contenido),"unidad_contenido":unidad,
+                        "presentacion":pres or f"{contenido:g} {unidad}",
+                        "fuente_precio":pagina_url,"tienda":tienda})
+            break
+    return out[:80]
 
 
 def _extraer_enlaces_productos(html_text, query, tienda, pagina_url):
@@ -3492,6 +3513,16 @@ for _rid, _r in RECETAS_REALES.items():
 DESAYUNOS = [k for k,v in RECETAS_REALES.items() if v["tipo"]=="Desayuno"]
 PLATOS = [k for k,v in RECETAS_REALES.items() if v["tipo"] in ("Comida","Cena")]
 
+# Cenas sencillas: preparaciones tradicionales/caseras que normalmente funcionan
+# mejor por la noche que un plato fuerte de comida. No se inventan recetas; solo
+# se prioriza una selección explícita de recetas ya existentes en la biblioteca.
+CENAS_SENCILLAS_TRADICIONALES = {
+    "calabacitas_queso", "arroz_frijoles", "tacos_papa_queso",
+    "frijoles_arroz_huevo", "enchiladas_queso", "tacos_atun",
+    "sardinas_papa", "calabacitas_arroz", "ensalada_atun_papa",
+    "atun_bolitas", "tortilla_espanola", "frittata_calabaza_queso",
+}
+
 def _producto_para_base(base, catalogo):
     """Selecciona un producto compatible para planificar.
 
@@ -3722,6 +3753,11 @@ def _generar_plan_local(
 
     candidatos_des = [r for r in DESAYUNOS if compatible(r, "Desayuno")]
     candidatos_pl = [r for r in PLATOS if compatible(r, "Comida")]
+    candidatos_cena = [r for r in PLATOS if compatible(r, "Cena") and r in CENAS_SENCILLAS_TRADICIONALES]
+    # Si el filtro elegido deja muy pocas cenas sencillas, ampliamos solo lo
+    # necesario a recetas caseras/mexicanas ya existentes; nunca inventamos un plato.
+    if len(candidatos_cena) < min(4, int(dias)):
+        candidatos_cena = [r for r in PLATOS if compatible(r, "Cena") and RECETAS_REALES[r].get("cocina") in {"Mexicana", "Casera"}]
 
     # Si un filtro muy específico deja una categoría sin recetas, no vamos a
     # inventar sustituciones. Primero se informa de forma clara.
@@ -3730,7 +3766,9 @@ def _generar_plan_local(
     if not candidatos_pl and any(x in comidas for x in ("Comida", "Cena")):
         raise ValueError("No hay comidas/cenas reales compatibles con los estilos, tiendas y restricciones seleccionados.")
 
-    pools = {"Desayuno": candidatos_des, "Comida": candidatos_pl, "Cena": candidatos_pl}
+    pools = {"Desayuno": candidatos_des, "Comida": candidatos_pl, "Cena": candidatos_cena}
+    if not candidatos_cena and "Cena" in comidas:
+        raise ValueError("No hay cenas sencillas reales compatibles con los estilos y restricciones seleccionados.")
 
     iso = date.today().isocalendar()
     semana_seed = (int(iso.year) * 100 + int(iso.week)) * 1000003
@@ -3974,10 +4012,16 @@ def _generar_plan_local(
         cocinas_objetivo = len(cocinas_usadas.intersection(set(estilos))) if estilos else len(cocinas_usadas)
 
         # Puntuación: primero viabilidad económica, luego variedad y cumplimiento.
+        cenas_sencillas = sum(1 for row in slots for rid in row if RECETAS_REALES[rid].get("tipo") == "Cena" and rid in CENAS_SENCILLAS_TRADICIONALES)
+        cenas_comida = sum(1 for row in slots for rid in row if RECETAS_REALES[rid].get("tipo") == "Cena" and rid not in CENAS_SENCILLAS_TRADICIONALES)
+        tradicionales = sum(1 for row in slots for rid in row if RECETAS_REALES[rid].get("cocina") == "Mexicana")
         score = (
             recetas_distintas * 55
             - repeticiones * 210
             + len(cocinas_usadas) * 65
+            + cenas_sencillas * 120
+            - cenas_comida * 160
+            + tradicionales * 35
             + cocinas_objetivo * 85
             + variedad_proteina * 110
             + (70 if "camaron" in proteínas else 0)
