@@ -4049,11 +4049,11 @@ def _generar_plan_local(
         "frijoles con huevo y queso sobre tortilla dorada",
         "calabacitas guisadas con queso y arroz",
     }
-    candidatos_pl = [r for r in candidatos_pl if normalizar_texto(r.get("nombre", "")) not in {normalizar_texto(x) for x in nombres_no_comida}]
+    candidatos_pl = [r for r in candidatos_pl if normalizar_texto(RECETAS_REALES[r].get("nombre", "")) not in {normalizar_texto(x) for x in nombres_no_comida}]
     # Una comida fuerte debe tener al menos una fuente proteica o ser un platillo
     # tradicional completo (pasta, enchiladas, tacos, pizza, etc.).
     palabras_plato = ("pollo","res","cerdo","pescado","atun","sardina","camaron","huevo","queso","tinga","enchilada","taco","albóndiga","pasta","pizza","lasaña","curry","fajita","milanesa")
-    candidatos_pl = [r for r in candidatos_pl if any(w in normalizar_texto(r.get("nombre", "")) for w in palabras_plato)]
+    candidatos_pl = [r for r in candidatos_pl if any(w in normalizar_texto(RECETAS_REALES[r].get("nombre", "")) for w in palabras_plato)]
 
     pools = {"Desayuno": candidatos_des, "Comida": candidatos_pl, "Cena": candidatos_cena}
     if not candidatos_cena and "Cena" in comidas:
