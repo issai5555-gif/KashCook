@@ -1516,6 +1516,108 @@ def _buscar_candidatos_tienda(tienda, ingrediente_base):
     return resultado
 
 
+
+def _buscar_candidatos_via_buscador_oficial(tienda, ingrediente_base):
+    """Respaldo cuando el buscador interno de la tienda es dinámico.
+
+    Primero localiza páginas del DOMINIO OFICIAL mediante un buscador web y
+    después descarga esas páginas oficiales para extraer producto, marca,
+    presentación y precio. El buscador solo sirve para descubrir la URL: nunca
+    se toma su precio/snippet como precio verificado.
+    """
+    dominio = DOMINIOS_OFICIALES.get(tienda, "")
+    consulta = CONSULTAS_PRECIO.get(ingrediente_base, ingrediente_base.replace("_", " "))
+    if not dominio or not consulta:
+        return []
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/154 Safari/537.36",
+        "Accept-Language": "es-MX,es;q=0.9,en;q=0.8",
+    }
+    q = quote_plus(f'site:{dominio} "{consulta}" precio')
+    urls = [f"https://www.bing.com/search?q={q}&count=6"]
+    candidatos = []
+    vistos_urls = set()
+    for search_url in urls:
+        try:
+            r = requests.get(search_url, headers=headers, timeout=5, allow_redirects=True)
+            if r.status_code != 200:
+                continue
+            soup = BeautifulSoup(r.text, "html.parser")
+            enlaces = []
+            for a in soup.select("li.b_algo h2 a, h2 a"):
+                href = a.get("href")
+                if href and dominio in href and href.startswith("http"):
+                    enlaces.append(href)
+            for href in enlaces[:5]:
+                if href in vistos_urls:
+                    continue
+                vistos_urls.add(href)
+                try:
+                    pr = requests.get(href, headers=headers, timeout=5, allow_redirects=True)
+                    if pr.status_code != 200 or dominio not in pr.url:
+                        continue
+                    encontrados = _extraer_candidatos_oficiales(pr.text, consulta, tienda, pr.url)
+                    if not encontrados:
+                        # Producto sencillo sin JSON-LD: usamos únicamente el
+                        # texto de la página oficial si contiene producto+precio
+                        # y una presentación identificable.
+                        psoup = BeautifulSoup(pr.text, "html.parser")
+                        titulo = psoup.title.get_text(" ", strip=True) if psoup.title else ""
+                        cuerpo = psoup.get_text(" ", strip=True)
+                        texto = f"{titulo} {cuerpo}"
+                        norm = normalizar_texto(texto)
+                        tokens = [x for x in normalizar_texto(consulta).split() if len(x) >= 3]
+                        if tokens and sum(tok in norm for tok in tokens) < 1:
+                            continue
+                        pm = re.search(r"\$\s*([0-9]{1,5}(?:[,][0-9]{3})*(?:\.[0-9]{1,2})?)", texto)
+                        if not pm:
+                            continue
+                        precio = _precio_float(pm.group(1))
+                        contenido, unidad, pres = _inferir_presentacion_producto(titulo + " " + cuerpo[:2500])
+                        if precio and contenido:
+                            encontrados = [{
+                                "nombre": titulo[:180] or consulta,
+                                "marca": _marca_desde_producto(titulo),
+                                "precio": round(precio, 2),
+                                "contenido": float(contenido),
+                                "unidad_contenido": unidad,
+                                "presentacion": pres or f"{contenido:g} {unidad}",
+                                "fuente_precio": pr.url,
+                                "tienda": tienda,
+                            }]
+                    for c in encontrados:
+                        if _candidato_compatible_base(c, {"ingrediente_base": ingrediente_base}):
+                            candidatos.append(c)
+                except Exception:
+                    continue
+            if candidatos:
+                break
+        except Exception:
+            continue
+    unicos = {}
+    for c in candidatos:
+        key = (normalizar_texto(c.get("nombre", "")), c.get("contenido"), c.get("unidad_contenido"))
+        if key not in unicos or float(c.get("precio", 10**9)) < float(unicos[key].get("precio", 10**9)):
+            unicos[key] = c
+    return sorted(unicos.values(), key=lambda x: float(x.get("precio", 10**9)))[:8]
+
+
+def _buscar_candidatos_tienda_robusto(tienda, base):
+    """Busca primero en la tienda y usa buscador externo solo como descubridor de URLs oficiales."""
+    res = _buscar_candidatos_tienda(tienda, base)
+    if res.get("candidatos"):
+        return res
+    respaldo = _buscar_candidatos_via_buscador_oficial(tienda, base)
+    if respaldo:
+        return {
+            "candidatos": respaldo,
+            "ultima_verificacion": datetime.now().astimezone().isoformat(timespec="minutes"),
+            "fuente": respaldo[0].get("fuente_precio", DOMINIOS_OFICIALES.get(tienda, "")),
+            "error": "",
+        }
+    return res
+
+
 def _buscar_candidatos_lote(tareas, max_workers=12):
     """Consulta tienda+ingrediente en paralelo para evitar esperas acumuladas."""
     resultados = {}
@@ -1531,7 +1633,7 @@ def _buscar_candidatos_lote(tareas, max_workers=12):
     if pendientes:
         workers = min(max_workers, len(pendientes))
         with ThreadPoolExecutor(max_workers=workers) as executor:
-            futuros = {executor.submit(_buscar_candidatos_tienda, tienda, base): (tienda, base)
+            futuros = {executor.submit(_buscar_candidatos_tienda_robusto, tienda, base): (tienda, base)
                        for tienda, base in pendientes}
             for futuro in as_completed(futuros):
                 tienda, base = futuros[futuro]
@@ -4025,3 +4127,4 @@ if "plan" in st.session_state:
     with tabs[4]:
         pdf_bytes=generar_pdf(plan=plan,compra=compra,total=total,presupuesto=presupuesto,personas=personas,tiendas=tiendas)
         st.download_button("📄 Descargar plan completo en PDF",data=pdf_bytes,file_name="KashCook_AI_Plan.pdf",mime="application/pdf",use_container_width=True)
+
