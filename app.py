@@ -1635,6 +1635,41 @@ def _consultar_url_oficial_producto(url, tienda, consulta, headers):
     except Exception:
         return []
 
+def _consultar_con_reader_oficial(tienda, ingrediente_base, headers):
+    """Fallback para tiendas cuyo buscador es renderizado por JavaScript.
+
+    Jina Reader solo actúa como transporte/lector de la URL OFICIAL de la tienda;
+    el dato se considera verificable únicamente si el contenido recibido sigue
+    correspondiendo al dominio oficial y contiene nombre + presentación + precio.
+    No se consulta un catálogo de terceros ni se usa un precio del buscador.
+    """
+    consulta = CONSULTAS_PRECIO.get(ingrediente_base, ingrediente_base.replace("_", " "))
+    for plantilla in BUSQUEDAS_TIENDA.get(tienda, [])[:1]:
+        url_oficial = plantilla.format(q=quote_plus(consulta))
+        reader_url = "https://r.jina.ai/" + url_oficial
+        try:
+            rr = requests.get(
+                reader_url,
+                headers={"User-Agent": headers.get("User-Agent", "Mozilla/5.0"),
+                         "Accept": "text/plain,text/markdown;q=0.9,*/*;q=0.8"},
+                timeout=7.0,
+                allow_redirects=True,
+            )
+            if rr.status_code != 200 or not rr.text.strip():
+                continue
+            # El Reader devuelve contenido de la URL oficial. No aceptamos que
+            # el propio texto cambie de dominio para evitar falsos positivos.
+            texto = rr.text
+            candidatos = _extraer_candidatos_lineas(texto, consulta, tienda, url_oficial)
+            compatibles = [c for c in candidatos
+                           if _candidato_compatible_base(c, {"ingrediente_base": ingrediente_base})]
+            if compatibles:
+                return compatibles
+        except Exception:
+            continue
+    return []
+
+
 def _buscar_candidatos_tienda(tienda, ingrediente_base):
     """Busca productos reales con pocas consultas y varios fallbacks.
     Solo trabaja sobre un ingrediente solicitado y cachea el resultado."""
@@ -1678,9 +1713,15 @@ def _buscar_candidatos_tienda(tienda, ingrediente_base):
             errores.append("sin productos identificables")
         except Exception as exc:
             errores.append(str(exc)[:80])
-    # FALLBACK CLAVE: si el buscador interno de la tienda es dinámico o no
-    # devuelve HTML útil, usamos un buscador web únicamente para descubrir
-    # páginas oficiales y luego consultamos esas páginas directamente.
+    # FALLBACK 1: lector de la URL OFICIAL para tiendas cuyo contenido se
+    # renderiza con JavaScript y no llega completo a requests/BeautifulSoup.
+    # Esto mantiene la fuente en el dominio de la tienda y evita falsos "No disponible".
+    if not candidatos:
+        candidatos.extend(_consultar_con_reader_oficial(tienda, ingrediente_base, headers))
+
+    # FALLBACK 2: si el buscador interno de la tienda sigue sin entregar datos,
+    # usamos un buscador web únicamente para descubrir páginas oficiales y luego
+    # consultamos esas páginas directamente.
     if not candidatos:
         urls = _descubrir_urls_oficiales_por_busqueda_web(tienda, consulta, max_urls=5)
         if urls:
