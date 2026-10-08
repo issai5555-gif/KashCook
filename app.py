@@ -1530,30 +1530,61 @@ def _extraer_enlaces_productos(html_text, query, tienda, pagina_url):
 
 
 def _descubrir_urls_oficiales_por_busqueda_web(tienda, consulta, max_urls=5):
-    """Descubre páginas oficiales de producto mediante un buscador web.
+    """Descubre URLs de productos SOLO dentro del dominio oficial.
 
-    El buscador solo se usa como índice para localizar URLs del dominio oficial.
-    Nunca tomamos el precio del buscador: cada URL descubierta se vuelve a
-    descargar desde el dominio de la tienda y el precio se extrae de esa página.
+    El descubrimiento usa primero Jina como lector de buscadores porque en
+    entornos cloud Google/Bing suelen devolver CAPTCHA/HTML incompleto a
+    requests. Jina solo sirve para descubrir la URL; el precio se obtiene
+    después desde la página oficial del supermercado.
     """
     dominio = DOMINIOS_OFICIALES.get(tienda, "")
     if not dominio:
         return []
     q = quote_plus(f'site:{dominio} "{consulta}"')
-    urls = []
-    seen = set()
+    urls, seen = [], set()
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/154 Safari/537.36",
         "Accept-Language": "es-MX,es;q=0.9,en;q=0.8",
     }
-    motores = [
+
+    def agregar(texto):
+        # Markdown de Jina: [titulo](https://dominio/...)
+        encontrados = re.findall(r'https?://[^\\s)<>\"]+', texto or "")
+        for href in encontrados:
+            href = href.rstrip('.,;]')
+            if dominio not in href:
+                continue
+            low = href.lower()
+            if any(x in low for x in ("/login", "/carrito", "/cart", "/ayuda", "/contacto", "/buscar", "/search")):
+                continue
+            href = href.split("#")[0]
+            if href not in seen:
+                seen.add(href)
+                urls.append(href)
+                if len(urls) >= max_urls:
+                    return True
+        return False
+
+    # 1) Jina leyendo resultados de Google/Bing.
+    for motor in (
+        f"https://www.google.com/search?q={q}&num=10",
+        f"https://www.bing.com/search?q={q}&count=10",
+    ):
+        try:
+            rr = requests.get("https://r.jina.ai/" + motor, headers=headers, timeout=6.0)
+            if rr.status_code == 200 and agregar(rr.text):
+                return urls[:max_urls]
+        except Exception:
+            pass
+
+    # 2) Motores directos como último recurso.
+    for motor in (
         f"https://www.google.com/search?q={q}&num=10",
         f"https://www.bing.com/search?q={q}&count=10",
         f"https://html.duckduckgo.com/html/?q={q}",
-    ]
-    for url_busqueda in motores:
+    ):
         try:
-            r = requests.get(url_busqueda, headers=headers, timeout=3.0, allow_redirects=True)
+            r = requests.get(motor, headers=headers, timeout=3.5, allow_redirects=True)
             if r.status_code != 200:
                 continue
             soup = BeautifulSoup(r.text, "html.parser")
@@ -1561,79 +1592,81 @@ def _descubrir_urls_oficiales_por_busqueda_web(tienda, consulta, max_urls=5):
                 href = a.get("href", "")
                 if href.startswith("//"):
                     href = "https:" + href
-                if href.startswith("/"):
-                    continue
-                # Google/Bing pueden devolver enlaces de redirección; intentamos
-                # recuperar la URL final del dominio oficial si está embebida.
-                if dominio not in href:
-                    m = re.search(r"https?%3A%2F%2F([^&]+)", href, re.I)
-                    if m and dominio in m.group(0):
-                        try:
-                            from urllib.parse import unquote
-                            href = unquote(href)
-                        except Exception:
-                            pass
                 if dominio not in href:
                     continue
                 href = href.split("#")[0]
-                if href in seen:
-                    continue
-                # Preferimos páginas de producto/categoría y descartamos home,
-                # login, carrito y páginas de ayuda.
                 low = href.lower()
-                if any(x in low for x in ("/login", "/carrito", "/cart", "/ayuda", "/contacto")):
+                if any(x in low for x in ("/login", "/carrito", "/cart", "/ayuda", "/contacto", "/buscar", "/search")):
                     continue
-                seen.add(href)
-                urls.append(href)
-                if len(urls) >= max_urls:
-                    return urls
+                if href not in seen:
+                    seen.add(href); urls.append(href)
+                    if len(urls) >= max_urls:
+                        return urls[:max_urls]
         except Exception:
-            continue
-    return urls
+            pass
+    return urls[:max_urls]
 
 
 def _consultar_url_oficial_producto(url, tienda, consulta, headers):
-    """Descarga una URL oficial descubierta y extrae candidatos reales."""
+    """Lee una URL de producto oficial y obtiene nombre/presentación/precio.
+
+    Si requests recibe una página vacía por renderizado JS, Jina actúa como
+    transporte de lectura de ESA MISMA URL oficial. Nunca se toma el precio de
+    un buscador o de un tercero.
+    """
     dominio = DOMINIOS_OFICIALES.get(tienda, "")
-    try:
-        r = requests.get(url, headers=headers, timeout=4.0, allow_redirects=True)
-        if r.status_code != 200 or dominio not in r.url:
-            return []
-        out = _extraer_candidatos_oficiales(r.text, consulta, tienda, r.url)
+
+    def extraer(texto, fuente):
+        out = _extraer_candidatos_oficiales(texto, consulta, tienda, fuente)
         if not out:
-            out = _extraer_candidatos_lineas(r.text, consulta, tienda, r.url)
-        # Algunas páginas usan meta tags de OpenGraph sin JSON-LD.
+            out = _extraer_candidatos_lineas(texto, consulta, tienda, fuente)
         if not out:
-            soup = BeautifulSoup(r.text, "html.parser")
+            soup = BeautifulSoup(texto, "html.parser")
             titulo = ""
-            for sel in ('meta[property="og:title"]', 'meta[name="twitter:title"]'):
-                node = soup.select_one(sel)
-                if node and node.get("content"):
-                    titulo = node.get("content").strip()
-                    break
-            precio = None
-            for sel in ('meta[property="product:price:amount"]', 'meta[itemprop="price"]'):
+            for sel in ('meta[property="og:title"]', 'meta[name="twitter:title"]', "title"):
                 node = soup.select_one(sel)
                 if node:
-                    precio = _precio_float(node.get("content") or node.get_text(" ", strip=True))
-                    if precio:
+                    titulo = (node.get("content") or node.get_text(" ", strip=True)).strip()
+                    if titulo:
                         break
-            if titulo and precio:
-                contenido, unidad, pres = _inferir_presentacion_producto(titulo + " " + soup.get_text(" ", strip=True)[:2500])
+            precios=[]
+            for sel in ('meta[property="product:price:amount"]', 'meta[itemprop="price"]'):
+                node=soup.select_one(sel)
+                if node:
+                    val=_precio_float(node.get("content") or node.get_text(" ",strip=True))
+                    if val: precios.append(val)
+            if not precios:
+                precios=[v for v in re.findall(r"\$\s*([0-9]{1,5}(?:[,][0-9]{3})*(?:\.[0-9]{1,2})?)", soup.get_text(" ",strip=True))]
+                precios=[_precio_float(v) for v in precios if _precio_float(v)]
+            if titulo and precios:
+                contenido,unidad,pres=_inferir_presentacion_producto(titulo+" "+soup.get_text(" ",strip=True)[:4000])
                 if contenido:
-                    out = [{
-                        "nombre": titulo,
-                        "marca": _marca_desde_producto(titulo),
-                        "precio": round(precio, 2),
-                        "contenido": float(contenido),
-                        "unidad_contenido": unidad,
-                        "presentacion": pres or f"{contenido:g} {unidad}",
-                        "fuente_precio": r.url,
-                        "tienda": tienda,
-                    }]
+                    out=[{"nombre":titulo,"marca":_marca_desde_producto(titulo),"precio":round(float(min(precios)),2),
+                          "contenido":float(contenido),"unidad_contenido":unidad,"presentacion":pres or f"{contenido:g} {unidad}",
+                          "fuente_precio":fuente,"tienda":tienda}]
         return out
+
+    try:
+        r=requests.get(url,headers=headers,timeout=4.5,allow_redirects=True)
+        if r.status_code==200 and dominio in r.url and r.text.strip():
+            out=extraer(r.text,r.url)
+            if out:
+                return out
     except Exception:
-        return []
+        pass
+
+    try:
+        rr=requests.get("https://r.jina.ai/"+url,
+                        headers={"User-Agent":headers.get("User-Agent","Mozilla/5.0"),"Accept":"text/plain,text/markdown;q=0.9,*/*;q=0.8"},
+                        timeout=7.0,allow_redirects=True)
+        if rr.status_code==200 and rr.text.strip():
+            out=extraer(rr.text,url)
+            if out:
+                return out
+    except Exception:
+        pass
+    return []
+
 
 def _consultar_con_reader_oficial(tienda, ingrediente_base, headers):
     """Fallback para tiendas cuyo buscador es renderizado por JavaScript.
@@ -1790,10 +1823,14 @@ def _candidato_compatible_base(candidato, producto_referencia):
     # tomate con tomate fresco.
     principal = consultas[0] if consultas else base
     aliases = {
-        "atun": ("atun", "atún"), "camaron": ("camaron", "camarón"),
-        "puerco": ("cerdo", "puerco"), "pescado": ("pescado", "filete"),
+        "atun": ("atun", "atún", "tuny", "dolores"),
+        "camaron": ("camaron", "camarón"),
+        "puerco": ("cerdo", "puerco"),
+        "pescado": ("pescado", "filete", "tilapia", "salmon", "salmón"),
         "arroz": ("arroz",), "frijol": ("frijol",), "tortilla": ("tortilla",),
         "huevo": ("huevo",), "queso": ("queso",), "aceite": ("aceite",),
+        "tomate": ("tomate",), "cebolla": ("cebolla",), "calabaza": ("calabaza", "calabacita"),
+        "papa": ("papa",), "zanahoria": ("zanahoria",), "lechuga": ("lechuga",),
     }
     return any(normalizar_texto(a) in nombre for a in aliases.get(base, (principal,)))
 
@@ -1873,28 +1910,40 @@ def construir_catalogo_productos_optimo(catalogo, bases_necesarias=None, presupu
     return resultado
 
 def verificar_precios_tiendas(catalogo, bases_necesarias=None, ids_necesarios=None):
-    """Conserva solo verificaciones realmente asociadas a productos concretos.
+    """Verifica únicamente los ingredientes realmente utilizados.
 
-    Los productos de referencia sirven para planificar, pero NO se convierten en
-    productos verificados mediante una búsqueda genérica. Los productos __live__
-    ya contienen marca, presentación, precio y fuente obtenidos del supermercado.
+    Esta función ahora SÍ ejecuta el verificador de tienda. La versión anterior
+    solo marcaba referencias como no disponibles, aunque ya existía un buscador
+    real en el archivo.
     """
-    ids = set(ids_necesarios or [])
     bases = set(bases_necesarias or [])
     actualizado = copy.deepcopy(catalogo)
+    tiendas = sorted({p.get("tienda") for p in actualizado if p.get("tienda")})
+    tareas = [(t, b) for t in tiendas for b in bases]
+    lote = _buscar_candidatos_lote(tareas, max_workers=min(12, max(1, len(tareas))))
+    por_base = {}
     for p in actualizado:
-        if p.get("id") not in ids or (bases and p.get("ingrediente_base") not in bases):
-            continue
-        if str(p.get("id", "")).find("__live__") >= 0 and p.get("estado_precio") == "Verificado":
-            continue
-        # Un producto de referencia no puede recibir un precio genérico y pasar
-        # como marca verificada. Si no existe un candidato __live__, quedará como
-        # no disponible y la validación final lo hará saber al usuario.
-        if p.get("estado_precio") != "Verificado":
-            p["estado_precio"] = "No disponible"
-            p["ultima_verificacion"] = datetime.now().astimezone().isoformat(timespec="minutes")
-            p["fuente_precio"] = DOMINIOS_OFICIALES.get(p.get("tienda"), "")
+        if p.get("estado_precio") == "Verificado":
+            por_base.setdefault(p.get("ingrediente_base"), []).append(p)
+    for tienda, base in tareas:
+        for c in lote.get((tienda, base), {}).get("candidatos", []):
+            ref = next((p for p in actualizado if p.get("tienda") == tienda and p.get("ingrediente_base") == base), None)
+            if not ref:
+                continue
+            cc = copy.deepcopy(ref)
+            cc["id"] = f"{ref['id']}__live__{abs(hash((c.get('nombre'),c.get('precio'),c.get('contenido'),c.get('unidad_contenido')))) % 10**9}"
+            cc["nombre"] = c.get("nombre", ref.get("nombre"))
+            cc["marca"] = c.get("marca", "Marca no identificada")
+            cc["precio"] = float(c["precio"])
+            cc["contenido"] = float(c.get("contenido") or ref.get("contenido") or 1)
+            cc["unidad_contenido"] = c.get("unidad_contenido") or ref.get("unidad_contenido")
+            cc["presentacion"] = c.get("presentacion") or ref.get("presentacion")
+            cc["estado_precio"] = "Verificado"
+            cc["ultima_verificacion"] = lote.get((tienda,base),{}).get("ultima_verificacion")
+            cc["fuente_precio"] = c.get("fuente_precio", "")
+            actualizado.append(cc)
     return actualizado
+
 
 def _reemplazar_productos_por_verificados(plan, catalogo_verificado):
     """Reasigna cada ingrediente del menú al producto verificado más económico.
