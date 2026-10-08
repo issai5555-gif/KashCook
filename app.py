@@ -1125,8 +1125,8 @@ BUSQUEDAS_TIENDA = {
         "https://www.bodegaaurrera.com.mx/search?query={q}",
     ],
     "Soriana": [
-        "https://www.soriana.com/search?q={q}",
-        "https://www.soriana.com/search?text={q}",
+        "https://www.soriana.com/buscar?q={q}",
+        "https://www.soriana.com/buscar?q={q}&search-button=",
     ],
     "Alsuper": [
         "https://alsuper.com/buscar?query={q}",
@@ -1528,6 +1528,113 @@ def _extraer_enlaces_productos(html_text, query, tienda, pagina_url):
     return links
 
 
+
+def _descubrir_urls_oficiales_por_busqueda_web(tienda, consulta, max_urls=5):
+    """Descubre páginas oficiales de producto mediante un buscador web.
+
+    El buscador solo se usa como índice para localizar URLs del dominio oficial.
+    Nunca tomamos el precio del buscador: cada URL descubierta se vuelve a
+    descargar desde el dominio de la tienda y el precio se extrae de esa página.
+    """
+    dominio = DOMINIOS_OFICIALES.get(tienda, "")
+    if not dominio:
+        return []
+    q = quote_plus(f'site:{dominio} "{consulta}"')
+    urls = []
+    seen = set()
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/154 Safari/537.36",
+        "Accept-Language": "es-MX,es;q=0.9,en;q=0.8",
+    }
+    motores = [
+        f"https://www.google.com/search?q={q}&num=10",
+        f"https://www.bing.com/search?q={q}&count=10",
+        f"https://html.duckduckgo.com/html/?q={q}",
+    ]
+    for url_busqueda in motores:
+        try:
+            r = requests.get(url_busqueda, headers=headers, timeout=3.0, allow_redirects=True)
+            if r.status_code != 200:
+                continue
+            soup = BeautifulSoup(r.text, "html.parser")
+            for a in soup.find_all("a", href=True):
+                href = a.get("href", "")
+                if href.startswith("//"):
+                    href = "https:" + href
+                if href.startswith("/"):
+                    continue
+                # Google/Bing pueden devolver enlaces de redirección; intentamos
+                # recuperar la URL final del dominio oficial si está embebida.
+                if dominio not in href:
+                    m = re.search(r"https?%3A%2F%2F([^&]+)", href, re.I)
+                    if m and dominio in m.group(0):
+                        try:
+                            from urllib.parse import unquote
+                            href = unquote(href)
+                        except Exception:
+                            pass
+                if dominio not in href:
+                    continue
+                href = href.split("#")[0]
+                if href in seen:
+                    continue
+                # Preferimos páginas de producto/categoría y descartamos home,
+                # login, carrito y páginas de ayuda.
+                low = href.lower()
+                if any(x in low for x in ("/login", "/carrito", "/cart", "/ayuda", "/contacto")):
+                    continue
+                seen.add(href)
+                urls.append(href)
+                if len(urls) >= max_urls:
+                    return urls
+        except Exception:
+            continue
+    return urls
+
+
+def _consultar_url_oficial_producto(url, tienda, consulta, headers):
+    """Descarga una URL oficial descubierta y extrae candidatos reales."""
+    dominio = DOMINIOS_OFICIALES.get(tienda, "")
+    try:
+        r = requests.get(url, headers=headers, timeout=4.0, allow_redirects=True)
+        if r.status_code != 200 or dominio not in r.url:
+            return []
+        out = _extraer_candidatos_oficiales(r.text, consulta, tienda, r.url)
+        if not out:
+            out = _extraer_candidatos_lineas(r.text, consulta, tienda, r.url)
+        # Algunas páginas usan meta tags de OpenGraph sin JSON-LD.
+        if not out:
+            soup = BeautifulSoup(r.text, "html.parser")
+            titulo = ""
+            for sel in ('meta[property="og:title"]', 'meta[name="twitter:title"]'):
+                node = soup.select_one(sel)
+                if node and node.get("content"):
+                    titulo = node.get("content").strip()
+                    break
+            precio = None
+            for sel in ('meta[property="product:price:amount"]', 'meta[itemprop="price"]'):
+                node = soup.select_one(sel)
+                if node:
+                    precio = _precio_float(node.get("content") or node.get_text(" ", strip=True))
+                    if precio:
+                        break
+            if titulo and precio:
+                contenido, unidad, pres = _inferir_presentacion_producto(titulo + " " + soup.get_text(" ", strip=True)[:2500])
+                if contenido:
+                    out = [{
+                        "nombre": titulo,
+                        "marca": _marca_desde_producto(titulo),
+                        "precio": round(precio, 2),
+                        "contenido": float(contenido),
+                        "unidad_contenido": unidad,
+                        "presentacion": pres or f"{contenido:g} {unidad}",
+                        "fuente_precio": r.url,
+                        "tienda": tienda,
+                    }]
+        return out
+    except Exception:
+        return []
+
 def _buscar_candidatos_tienda(tienda, ingrediente_base):
     """Busca productos reales con pocas consultas y varios fallbacks.
     Solo trabaja sobre un ingrediente solicitado y cachea el resultado."""
@@ -1571,6 +1678,20 @@ def _buscar_candidatos_tienda(tienda, ingrediente_base):
             errores.append("sin productos identificables")
         except Exception as exc:
             errores.append(str(exc)[:80])
+    # FALLBACK CLAVE: si el buscador interno de la tienda es dinámico o no
+    # devuelve HTML útil, usamos un buscador web únicamente para descubrir
+    # páginas oficiales y luego consultamos esas páginas directamente.
+    if not candidatos:
+        urls = _descubrir_urls_oficiales_por_busqueda_web(tienda, consulta, max_urls=5)
+        if urls:
+            with ThreadPoolExecutor(max_workers=min(5, len(urls))) as ex:
+                futuros = [ex.submit(_consultar_url_oficial_producto, u, tienda, consulta, headers) for u in urls]
+                for fut in as_completed(futuros):
+                    try:
+                        candidatos.extend(fut.result())
+                    except Exception:
+                        pass
+
     unicos={}
     for c in candidatos:
         if not _candidato_compatible_base(c,{"ingrediente_base":ingrediente_base}):
