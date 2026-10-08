@@ -3,6 +3,13 @@ import json
 import math
 import re
 import html
+import copy
+import time
+from datetime import datetime
+from urllib.parse import quote_plus
+
+import requests
+from bs4 import BeautifulSoup
 
 import streamlit as st
 from groq import Groq
@@ -170,6 +177,18 @@ def crear_catalogos():
             140,
             "g",
             28,
+        ),
+
+        producto(
+            "alsuper_camaron",
+            "Alsuper",
+            "Camarón limpio",
+            "proteina",
+            "camaron",
+            "Bolsa 500 g",
+            500,
+            "g",
+            179,
         ),
 
         producto(
@@ -420,6 +439,18 @@ def crear_catalogos():
         ),
 
         producto(
+            "walmart_camaron",
+            "Walmart",
+            "Camarón limpio",
+            "proteina",
+            "camaron",
+            "Bolsa 500 g",
+            500,
+            "g",
+            185,
+        ),
+
+        producto(
             "walmart_sardina",
             "Walmart",
             "Sardinas en tomate",
@@ -652,6 +683,18 @@ def crear_catalogos():
             140,
             "g",
             29,
+        ),
+
+        producto(
+            "soriana_camaron",
+            "Soriana",
+            "Camarón limpio",
+            "proteina",
+            "camaron",
+            "Bolsa 500 g",
+            500,
+            "g",
+            189,
         ),
 
         producto(
@@ -890,6 +933,18 @@ def crear_catalogos():
         ),
 
         producto(
+            "bodega_camaron",
+            "Bodega Aurrerá",
+            "Camarón limpio",
+            "proteina",
+            "camaron",
+            "Bolsa 500 g",
+            500,
+            "g",
+            175,
+        ),
+
+        producto(
             "bodega_sardina",
             "Bodega Aurrerá",
             "Sardinas en tomate",
@@ -1038,6 +1093,252 @@ def crear_catalogos():
 
 
 CATALOGOS = crear_catalogos()
+
+# Transparencia de precios: estos valores son referencias precargadas.
+# Nunca se presentan como precios de caja verificados al momento de consulta.
+for _lista in CATALOGOS.values():
+    for _p in _lista:
+        _p["estado_precio"] = "Referencia"
+        _p["ultima_verificacion"] = None
+        _p["fuente_precio"] = "Catálogo interno de referencia"
+
+
+# ============================================================
+# VERIFICACIÓN DE PRECIOS EN TIEMPO REAL
+# ============================================================
+# Regla de confianza: un precio solo entra al cálculo como "verificado" si
+# fue encontrado durante esta consulta en el dominio oficial de la tienda.
+# Si la tienda no responde o no podemos identificar con suficiente confianza
+# el producto/precio, KashCook NO utiliza el precio de referencia.
+
+PRECIO_CACHE = {}
+PRECIO_CACHE_TTL = 15 * 60
+
+BUSQUEDAS_TIENDA = {
+    "Walmart": [
+        "https://www.walmart.com.mx/search?q={q}",
+        "https://www.walmart.com.mx/search?query={q}",
+    ],
+    "Bodega Aurrerá": [
+        "https://www.bodegaaurrera.com.mx/search?q={q}",
+        "https://www.bodegaaurrera.com.mx/search?query={q}",
+    ],
+    "Soriana": [
+        "https://www.soriana.com/search?q={q}",
+        "https://www.soriana.com/search?text={q}",
+    ],
+    "Alsuper": [
+        "https://alsuper.com/buscar?query={q}",
+        "https://alsuper.com/search?search={q}",
+        "https://alsuper.com/busqueda?query={q}",
+    ],
+}
+
+DOMINIOS_OFICIALES = {
+    "Walmart": "walmart.com.mx",
+    "Bodega Aurrerá": "bodegaaurrera.com.mx",
+    "Soriana": "soriana.com",
+    "Alsuper": "alsuper.com",
+}
+
+CONSULTAS_PRECIO = {
+    "pollo": "pechuga de pollo",
+    "res": "carne de res para guisar",
+    "molida": "carne molida de res",
+    "puerco": "carne de cerdo",
+    "pescado": "filete de pescado",
+    "atun": "atun en agua",
+    "camaron": "camaron limpio",
+    "sardina": "sardinas en tomate",
+    "huevo": "huevo blanco",
+    "arroz": "arroz blanco",
+    "frijol": "frijol pinto",
+    "tortilla": "tortilla de maiz",
+    "papa": "papa blanca",
+    "tomate": "tomate rojo",
+    "cebolla": "cebolla blanca",
+    "zanahoria": "zanahoria",
+    "lechuga": "lechuga romana",
+    "calabaza": "calabacita",
+    "queso": "queso fresco",
+    "aceite": "aceite vegetal",
+}
+
+
+def _precio_float(valor):
+    try:
+        if isinstance(valor, (int, float)):
+            return float(valor)
+        txt = str(valor).replace("$", "").replace(",", "").strip()
+        m = re.search(r"\d+(?:\.\d{1,2})?", txt)
+        return float(m.group(0)) if m else None
+    except Exception:
+        return None
+
+
+def _extraer_precio_oficial(html_text, query):
+    """Extrae un precio de una página oficial sin aceptar datos de terceros."""
+    soup = BeautifulSoup(html_text, "html.parser")
+    candidatos = []
+
+    # JSON-LD es preferible a texto libre.
+    for tag in soup.find_all("script", attrs={"type": "application/ld+json"}):
+        raw = tag.string or tag.get_text(" ", strip=True)
+        try:
+            data = json.loads(raw)
+        except Exception:
+            continue
+        stack = data if isinstance(data, list) else [data]
+        while stack:
+            obj = stack.pop()
+            if isinstance(obj, dict):
+                if "offers" in obj:
+                    offers = obj["offers"]
+                    if isinstance(offers, dict):
+                        offers = [offers]
+                    for offer in offers or []:
+                        if isinstance(offer, dict):
+                            val = _precio_float(offer.get("price") or offer.get("lowPrice"))
+                            if val and val > 0:
+                                candidatos.append(val)
+                for v in obj.values():
+                    if isinstance(v, (dict, list)):
+                        stack.append(v)
+            elif isinstance(obj, list):
+                stack.extend(obj)
+
+    query_tokens = [x for x in normalizar_texto(query).split() if len(x) >= 3]
+    def contexto_coincide(node):
+        contexto = normalizar_texto(node.parent.get_text(" ", strip=True) if node.parent else node.get_text(" ", strip=True))
+        # No exigimos todos los tokens para productos frescos, pero sí al menos
+        # uno relevante y preferimos coincidencia de dos o más.
+        hits = sum(tok in contexto for tok in query_tokens)
+        return hits >= min(2, len(query_tokens)) if query_tokens else True
+
+    for sel in [
+        'meta[itemprop="price"]', 'meta[property="product:price:amount"]',
+        '[itemprop="price"]', '[data-testid*="price"]', '[class*="price"]',
+    ]:
+        for node in soup.select(sel):
+            if not contexto_coincide(node):
+                continue
+            val = _precio_float(node.get("content") or node.get_text(" ", strip=True))
+            if val and val > 0:
+                candidatos.append(val)
+
+    # Último recurso: busca precios cerca de la consulta, no el menor precio
+    # arbitrario de toda la página de resultados.
+    texto = soup.get_text(" ", strip=True)
+    for m in re.finditer(r".{0,260}\$\s*([0-9]{1,5}(?:[,][0-9]{3})*(?:\.[0-9]{1,2})?).{0,260}", texto, flags=re.I):
+        contexto = normalizar_texto(m.group(0))
+        if query_tokens and sum(tok in contexto for tok in query_tokens) < min(2, len(query_tokens)):
+            continue
+        val = _precio_float(m.group(1))
+        if val and 1 <= val <= 10000:
+            candidatos.append(val)
+
+    if not candidatos:
+        return None
+    # Para búsquedas de alimentos, el menor precio positivo suele corresponder a
+    # una presentación económica, pero nunca se mezcla con el catálogo interno.
+    return min(candidatos)
+
+
+def _consultar_precio_tienda(tienda, ingrediente_base):
+    consulta = CONSULTAS_PRECIO.get(ingrediente_base, ingrediente_base.replace("_", " "))
+    clave = (tienda, ingrediente_base)
+    ahora = time.time()
+    cache = PRECIO_CACHE.get(clave)
+    if cache and ahora - cache["ts"] < PRECIO_CACHE_TTL:
+        return cache["resultado"]
+
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/154 Safari/537.36",
+        "Accept-Language": "es-MX,es;q=0.9,en;q=0.8",
+    }
+    resultado = None
+    errores = []
+    for plantilla in BUSQUEDAS_TIENDA.get(tienda, []):
+        url = plantilla.format(q=quote_plus(consulta))
+        try:
+            r = requests.get(url, headers=headers, timeout=9, allow_redirects=True)
+            dominio = DOMINIOS_OFICIALES[tienda]
+            if r.status_code != 200 or dominio not in r.url or dominio not in str(r.headers.get("Content-Type", "")) and not r.text:
+                errores.append(f"HTTP {r.status_code}")
+                continue
+            precio = _extraer_precio_oficial(r.text, consulta)
+            if precio is not None:
+                texto_oficial = BeautifulSoup(r.text, "html.parser").get_text(" ", strip=True)
+                texto_norm = normalizar_texto(texto_oficial)
+                venta_por_kg = bool(re.search(r"por\s+(kilogramo|kg)|\$/?\s*kg|kg\s*$", texto_norm))
+                resultado = {
+                    "precio": round(precio, 2),
+                    "venta_por_kg": venta_por_kg,
+                    "estado": "Verificado",
+                    "ultima_verificacion": datetime.now().astimezone().isoformat(timespec="minutes"),
+                    "fuente": r.url,
+                }
+                break
+            errores.append("sin precio identificable")
+        except Exception as exc:
+            errores.append(str(exc)[:80])
+
+    if resultado is None:
+        resultado = {
+            "precio": None,
+            "venta_por_kg": False,
+            "estado": "No disponible",
+            "ultima_verificacion": datetime.now().astimezone().isoformat(timespec="minutes"),
+            "fuente": DOMINIOS_OFICIALES.get(tienda, ""),
+            "error": "; ".join(errores[-2:]),
+        }
+    PRECIO_CACHE[clave] = {"ts": ahora, "resultado": resultado}
+    return resultado
+
+
+def verificar_precios_tiendas(catalogo, bases_necesarias=None, ids_necesarios=None):
+    """Verifica solo los ingredientes/productos que realmente requiere el plan.
+
+    Devuelve una copia del catálogo. Ningún precio de referencia se convierte
+    en precio verificado por defecto. Si un producto no se puede verificar,
+    queda marcado como no disponible.
+    """
+    bases = set(bases_necesarias or [p.get("ingrediente_base") for p in catalogo])
+    ids = set(ids_necesarios or [p.get("id") for p in catalogo])
+    actualizado = copy.deepcopy(catalogo)
+    for p in actualizado:
+        base = p.get("ingrediente_base")
+        if p.get("id") not in ids or base not in bases:
+            continue
+        resultado = _consultar_precio_tienda(p.get("tienda"), base)
+        if resultado.get("precio") is not None:
+            # Mantenemos la presentación/contenido del producto catalogado;
+            # solo sustituimos el precio si la consulta oficial lo verificó.
+            p["precio"] = float(resultado["precio"])
+            p["venta_por_kg"] = bool(resultado.get("venta_por_kg", False))
+            if p["venta_por_kg"] and p.get("unidad_contenido") in {"kg", "g"}:
+                p["presentacion"] = f"Venta por kg · {p.get('presentacion','')}"
+            p["estado_precio"] = "Verificado"
+            p["ultima_verificacion"] = resultado["ultima_verificacion"]
+            p["fuente_precio"] = resultado["fuente"]
+        else:
+            p["estado_precio"] = "No disponible"
+            p["ultima_verificacion"] = resultado["ultima_verificacion"]
+            p["fuente_precio"] = resultado.get("fuente", "")
+    return actualizado
+
+
+def validar_precios_verificados(compra):
+    faltantes = [x for x in compra if x.get("estado_precio") != "Verificado"]
+    if faltantes:
+        nombres = ", ".join(x.get("producto", "producto") for x in faltantes[:8])
+        extra = "..." if len(faltantes) > 8 else ""
+        raise ValueError(
+            "No es posible entregar un total como precio real de hoy porque KashCook no pudo verificar "
+            f"estos productos en la tienda seleccionada: {nombres}{extra}. "
+            "No se utilizaron precios de referencia para ocultar el faltante."
+        )
+    return True
 
 
 # ============================================================
@@ -1485,10 +1786,24 @@ def validar_plan_completo(plan, dias_solicitados, comidas_solicitadas, catalogo)
                 if ing.get("producto_id") not in ids_validos:
                     return False, f"Hay un producto_id inválido en el día {i}."
                 try:
-                    if float(ing.get("cantidad_por_persona", 0)) <= 0:
+                    cantidad = float(ing.get("cantidad_por_persona", 0))
+                    if cantidad <= 0:
                         return False, f"Hay una cantidad inválida en el día {i}."
                 except Exception:
                     return False, f"Hay una cantidad inválida en el día {i}."
+
+            # Controles mínimos de porción por persona para evitar menús
+            # matemáticamente "válidos" pero absurdos en la práctica.
+            mapa = {p["id"]: p for p in catalogo}
+            for ing in ingredientes:
+                prod = mapa.get(ing.get("producto_id"), {})
+                base = prod.get("ingrediente_base")
+                unidad = normalizar_texto(ing.get("unidad"))
+                cantidad = float(ing.get("cantidad_por_persona", 0))
+                if base == "huevo" and unidad == "pieza" and cantidad < 2 and any(k in normalizar_texto(comida.get("nombre")) for k in ("huevo", "omelette", "migas")):
+                    return False, f"El desayuno del día {i} requiere al menos 2 huevos por persona."
+                if base in {"pollo", "res", "molida", "puerco", "pescado", "camaron"} and unidad == "kg" and cantidad < 0.12:
+                    return False, f"La porción de proteína del día {i} es menor a 120 g por persona."
 
     return True, "OK"
 
@@ -1622,7 +1937,9 @@ def calcular_compra(
                 )
 
                 if producto_id not in productos_por_id:
-                    continue
+                    raise ValueError(
+                        f"La receta contiene un ingrediente sin producto de compra válido: {producto_id}."
+                    )
 
                 try:
                     cantidad_persona = float(
@@ -1661,7 +1978,9 @@ def calcular_compra(
                 )
 
                 if unidad_base != unidad_contenido_base:
-                    continue
+                    raise ValueError(
+                        f"La presentación comercial de {p.get('nombre','producto')} no es compatible con la unidad de la receta ({unidad})."
+                    )
 
                 if contenido_base <= 0:
                     continue
@@ -1691,17 +2010,20 @@ def calcular_compra(
             p["unidad_contenido"],
         )
 
-        paquetes = math.ceil(
-            item["cantidad_requerida"]
-            / contenido_base
-        )
-
-        if paquetes < 1:
-            paquetes = 1
-
-        subtotal = (
-            paquetes * p["precio"]
-        )
+        # Carnes/pescados frescos vendidos por kilogramo: no inventamos un
+        # paquete fijo; calculamos la cantidad realmente requerida al precio/kg.
+        if p.get("venta_por_kg") and item.get("unidad") == "g":
+            cantidad_kg = item["cantidad_requerida"] / 1000.0
+            paquetes = cantidad_kg
+            subtotal = cantidad_kg * p["precio"]
+        else:
+            paquetes = math.ceil(
+                item["cantidad_requerida"]
+                / contenido_base
+            )
+            if paquetes < 1:
+                paquetes = 1
+            subtotal = paquetes * p["precio"]
 
         total += subtotal
 
@@ -1734,6 +2056,9 @@ def calcular_compra(
                 "tienda": p[
                     "tienda"
                 ],
+                "estado_precio": p.get("estado_precio", "Referencia"),
+                "ultima_verificacion": p.get("ultima_verificacion"),
+                "fuente_precio": p.get("fuente_precio", ""),
             }
         )
 
@@ -2415,6 +2740,21 @@ RECETAS_REALES = {
     'tacos_atun': {"tipo":'Cena',"nombre":'Tacos de atún con papa y queso',"fuente":'Cocina mexicana tradicional',"ingredientes":[('tortilla', 0.18, 'kg'), ('atun', 1, 'pieza'), ('papa', 0.16, 'kg'), ('queso', 0.05, 'kg'), ('tomate', 0.06, 'kg'), ('cebolla', 0.03, 'kg'), ('aceite', 10, 'ml')],"pasos":['Prepara los ingredientes de tacos de atún con papa y queso y cocina cada componente hasta que quede bien cocido.', 'Integra los ingredientes principales y deja que se mezclen los sabores a fuego medio.', 'Ajusta la sazón y termina la preparación con la guarnición indicada.', 'Sirve caliente y aprovecha las porciones completas para evitar desperdicios.']},}
 
 
+# Recetas verificadas en fuentes culinarias externas.
+RECETAS_REALES.update({
+    "camaron_mexicana": {"tipo":"Comida","nombre":"Camarón a la mexicana","fuente":"Recetas Nestlé México","fuente_url":"https://www.recetasnestle.com.mx/recetas/camarones-a-la-mexicana","verificada":True,"cocina":"Mexicana","ingredientes":[("camaron",0.175,"kg"),("tomate",0.12,"kg"),("cebolla",0.04,"kg"),("aceite",8,"ml")],"pasos":["Sofríe la cebolla en aceite hasta que empiece a transparentar.","Agrega el camarón y cocina hasta que cambie de color y quede completamente cocido.","Incorpora el jitomate picado y cocina unos minutos para integrar la salsa.","Sazona y sirve inmediatamente; la receta original también contempla chile, ajo y condimentos."]},
+    "camaron_oriental": {"tipo":"Cena","nombre":"Camarones orientales","fuente":"Recetas Nestlé México","fuente_url":"https://www.recetasnestle.com.mx/recetas/camarones-orientales","verificada":True,"cocina":"Asiática","ingredientes":[("camaron",0.25,"kg"),("cebolla",0.03,"kg"),("aceite",10,"ml")],"pasos":["Marina los camarones con los condimentos de la receta original.","Sofríe la cebolla en aceite y agrega los camarones.","Cocina hasta que estén completamente cocidos y la salsa se integre.","Sirve caliente; la receta original incorpora salsa de soya y cátsup para el acabado oriental."]},
+    "picadillo_verificado": {"tipo":"Comida","nombre":"Picadillo de carne molida estilo casero","fuente":"Recetas Nestlé México","fuente_url":"https://www.recetasnestle.com.mx/recetas/picadillo-de-carne-molida-estilo-casero","verificada":True,"cocina":"Mexicana","ingredientes":[("molida",0.133,"kg"),("papa",0.17,"kg"),("zanahoria",0.10,"kg"),("tomate",0.18,"kg"),("cebolla",0.03,"kg"),("aceite",8,"ml")],"pasos":["Sofríe la cebolla y cocina la carne molida hasta que cambie completamente de color.","Agrega papa y zanahoria y cocina unos minutos.","Incorpora el jitomate licuado y cocina hasta que las verduras estén suaves y la salsa reduzca.","Sirve caliente con el acompañamiento elegido."]},
+    "pescado_mexicana_verificado": {"tipo":"Comida","nombre":"Pescado a la mexicana","fuente":"Recetas Nestlé México","fuente_url":"https://www.recetasnestle.com.mx/recetas/pescado-mexicana","verificada":True,"cocina":"Mexicana","ingredientes":[("pescado",0.12,"kg"),("cebolla",0.03,"kg"),("tomate",0.12,"kg"),("aceite",6,"ml")],"pasos":["Coloca el pescado con cebolla y jitomate y cocina con el sazonador de la receta original.","Cocina hasta que el filete esté completamente hecho.","Comprueba que la carne se desmenuce fácilmente y sirve caliente."]},
+    "pollo_pimientos_verificado": {"tipo":"Comida","nombre":"Pollo con pimientos","fuente":"Recetas Nestlé México","fuente_url":"https://www.recetasnestle.com.mx/recetas/pollo-pimientos","verificada":True,"cocina":"Mexicana","ingredientes":[("pollo",0.20,"kg"),("cebolla",0.04,"kg"),("aceite",10,"ml")],"pasos":["Saltea la cebolla y los pimientos de la receta original.","Agrega el pollo y dóralo por ambos lados.","Incorpora los condimentos de la receta y continúa la cocción hasta que el pollo esté completamente cocido.","Sirve caliente; la fuente recomienda acompañarlo con arroz blanco."]},
+    "pollo_agridulce_verificado": {"tipo":"Comida","nombre":"Pollo agridulce","fuente":"Recetas Nestlé México","fuente_url":"https://www.recetasnestle.com.mx/recetas/pollo-agridulce","verificada":True,"cocina":"Asiática","ingredientes":[("pollo",0.20,"kg"),("cebolla",0.04,"kg"),("calabaza",0.13,"kg"),("aceite",8,"ml")],"pasos":["Dora la cebolla y la calabacita en aceite.","Agrega el pollo y cocina hasta que tome color.","Incorpora la salsa y los condimentos de la receta original y deja reducir.","Sirve caliente; la fuente recomienda acompañar con arroz frito."]},
+    "cerdo_crema_verificado": {"tipo":"Comida","nombre":"Cerdo a la crema","fuente":"Recetas Nestlé México","fuente_url":"https://www.recetasnestle.com.mx/recetas/cerdo-a-la-crema","verificada":True,"cocina":"Mexicana","ingredientes":[("puerco",0.25,"kg"),("aceite",8,"ml")],"pasos":["Dora el cerdo con aceite.","Cocina el cerdo hasta que esté tierno.","Prepara la salsa cremosa con los ingredientes de la receta original y reincorpora la carne.","Cocina unos minutos más y sirve caliente."]},
+    "res_pimienta_verificado": {"tipo":"Comida","nombre":"Puntas de res en salsa de pimienta","fuente":"Recetas Nestlé México","fuente_url":"https://www.recetasnestle.com.mx/recetas/puntas-res-salsa-pimienta","verificada":True,"cocina":"Mexicana","ingredientes":[("res",0.15,"kg"),("cebolla",0.03,"kg"),("aceite",8,"ml")],"pasos":["Cocina las fajitas de res hasta que estén doradas.","Prepara la salsa de pimienta siguiendo la base de la receta original.","Cocina la salsa hasta que espese y báñala sobre la carne.","Sirve inmediatamente."]},
+    "atun_bolitas_verificado": {"tipo":"Cena","nombre":"Bolitas de atún","fuente":"Recetas Nestlé México","fuente_url":"https://www.recetasnestle.com.mx/recetas/bolitas-de-atun","verificada":True,"cocina":"Mexicana","ingredientes":[("atun",0.5,"pieza"),("huevo",0.5,"pieza"),("aceite",10,"ml"),("papa",0.08,"kg")],"pasos":["Mezcla el atún con huevo, papa y los condimentos de la receta original.","Forma las bolitas y rebózalas según la preparación original.","Fríe hasta que estén doradas y escurre el exceso de aceite.","Sirve calientes con ensalada o una guarnición ligera."]},
+    "huevos_mexicana_verificados": {"tipo":"Desayuno","nombre":"Huevos a la mexicana","fuente":"Recetas Nestlé México","fuente_url":"https://www.recetasnestle.com.mx/recetas/huevos-mexicana-desayuno","verificada":True,"cocina":"Mexicana","ingredientes":[("huevo",2,"pieza"),("tomate",0.10,"kg"),("cebolla",0.03,"kg"),("aceite",8,"ml")],"pasos":["Sofríe la cebolla y agrega el jitomate hasta que se suavice.","Bate los huevos y agrégalos al sartén.","Cocina moviendo hasta que el huevo quede cuajado y sirve caliente."]},
+    "huevos_rancheros_verificados": {"tipo":"Desayuno","nombre":"Huevos rancheros","fuente":"Recetas Nestlé México","fuente_url":"https://www.recetasnestle.com.mx/recetas/huevos-rancheros","verificada":True,"cocina":"Mexicana","ingredientes":[("huevo",2,"pieza"),("tomate",0.15,"kg"),("cebolla",0.04,"kg"),("tortilla",0.10,"kg"),("aceite",8,"ml")],"pasos":["Prepara la salsa ranchera con jitomate, cebolla y los chiles de la receta original.","Cocina los huevos al punto deseado.","Sirve los huevos con la salsa caliente y tortillas."]},
+})
+
 # ---------------- COCINAS INTERNACIONALES ----------------
 # Estas recetas usan únicamente ingredientes que KashCook puede convertir en
 # productos del catálogo actual. Son platos reconocibles; no son nombres
@@ -2433,9 +2773,39 @@ RECETAS_REALES.update({
     "arroz_tomate_italiano": {"tipo":"Comida","nombre":"Arroz italiano con tomate, queso y verduras","fuente":"Cocina italiana casera","cocina":"Italiana","ingredientes":[("arroz",0.10,"kg"),("tomate",0.16,"kg"),("cebolla",0.04,"kg"),("calabaza",0.12,"kg"),("queso",0.06,"kg"),("aceite",10,"ml")],"pasos":["Sofríe la cebolla y la calabacita con aceite hasta que comiencen a suavizarse.","Agrega el arroz y remueve un par de minutos para que se impregne del sofrito.","Añade tomate picado y agua suficiente para cocinar el arroz hasta que quede tierno.","Apaga el fuego, incorpora el queso y deja reposar unos minutos antes de servir."]},
 })
 
+# Corrección de preparaciones: ningún plato sale con pasos genéricos de plantilla.
+_PREPARACIONES_REALES = {
+"chilaquiles_rojos":["Prepara una salsa roja con jitomate, cebolla y chile; cocina hasta que tome cuerpo.","Calienta las tortillas/totopos y báñalos con la salsa sin dejarlos deshacer por completo.","Sirve con huevo estrellado y queso fresco por encima.","Acompaña inmediatamente para conservar la textura de los chilaquiles."],
+"omelette_calabacita":["Saltea la calabacita y la cebolla hasta que estén tiernas.","Bate los huevos y viértelos en la sartén caliente.","Cuando la base esté cuajada, coloca el queso y dobla el omelette.","Termina la cocción a fuego bajo y sirve con tomate fresco."],
+"huevos_arroz_frijol":["Calienta el arroz y los frijoles por separado.","Cocina los huevos estrellados en una sartén con poco aceite.","Sirve una porción de arroz y frijoles y coloca los huevos encima.","Termina con tomate y cebolla frescos."],
+"quesadillas_papa":["Cuece la papa y machácala hasta obtener un relleno uniforme.","Rellena las tortillas con papa y queso.","Dóralas en sartén por ambos lados hasta que el queso se funda.","Sirve con tomate y cebolla picados."],
+"flautas_papa":["Cuece y machaca la papa y mezcla con el queso.","Rellena y enrolla las tortillas formando flautas; sujeta si es necesario.","Dora las flautas en aceite caliente hasta que queden crujientes.","Sirve con lechuga y tomate."],
+"huevos_tomate_papa":["Cuece la papa en cubos hasta que esté tierna y dóralos ligeramente.","Agrega cebolla y tomate y cocina hasta formar un sofrito.","Incorpora los huevos batidos y remueve hasta que cuajen.","Sirve caliente con tortillas."],
+"tostadas_frijol_huevo":["Calienta y dora las tortillas hasta obtener una base crujiente.","Unta frijoles calientes sobre cada tortilla.","Prepara los huevos y colócalos sobre los frijoles.","Termina con queso y tomate picado."],
+"migas_mexicanas":["Corta las tortillas en tiras y dóralas ligeramente en sartén.","Agrega cebolla y tomate y cocina hasta suavizar.","Incorpora los huevos batidos y mezcla hasta que estén cuajados.","Termina con queso fresco y sirve caliente."],
+"tinga_pollo":["Cuece el pollo y deshébralo.","Sofríe la cebolla y prepara una salsa de jitomate con los condimentos de la tinga.","Agrega el pollo deshebrado y cocina hasta que absorba la salsa.","Sirve caliente en tortillas."],
+"albondigas":["Mezcla la carne molida con una pequeña parte del arroz y forma albóndigas.","Prepara un caldillo de jitomate con cebolla.","Agrega las albóndigas y cocina tapado hasta que estén completamente cocidas.","Incorpora papa y zanahoria y termina la cocción hasta que estén tiernas."],
+"carne_molida_papas":["Sofríe la cebolla y cocina la carne molida hasta que cambie de color.","Agrega papa y zanahoria en cubos y cocina unos minutos.","Añade jitomate licuado y deja hervir hasta que las verduras estén tiernas.","Sirve con tortillas calientes."],
+"pollo_papas":["Dora el pollo en una olla con poco aceite.","Agrega papa, zanahoria, cebolla y jitomate.","Añade un poco de agua, tapa y cocina hasta que el pollo esté completamente cocido.","Sirve con arroz blanco."],
+"pollo_tomate_arroz":["Dora el pollo y agrega cebolla.","Incorpora el jitomate y cocina hasta formar una salsa.","Agrega zanahoria y cocina tapado hasta que el pollo esté completamente cocido.","Sirve con arroz."],
+"cerdo_papa_tomate":["Dora el cerdo en una olla.","Agrega cebolla y papa y cocina unos minutos.","Incorpora jitomate y zanahoria con un poco de agua.","Tapa y cocina hasta que el cerdo esté tierno y las verduras suaves; sirve con tortillas."],
+"pescado_papa_tomate":["Sazona y sella el pescado brevemente.","Agrega papa, jitomate, cebolla y zanahoria.","Añade un poco de agua y cocina tapado hasta que la papa esté tierna y el pescado completamente cocido.","Sirve con la salsa del guiso."],
+"atun_papa":["Cuece la papa en cubos hasta que esté tierna.","Sofríe cebolla y tomate y agrega el atún escurrido.","Incorpora la papa y cocina unos minutos para integrar los sabores.","Sirve caliente con tortillas."],
+"sardinas_papa":["Sofríe cebolla y tomate hasta formar una base de salsa.","Agrega la papa y zanahoria y cocina hasta que estén tiernas.","Incorpora las sardinas al final para evitar que se deshagan demasiado.","Calienta unos minutos y sirve con tortillas."],
+"calabacitas_arroz":["Saltea cebolla y calabacita hasta que estén tiernas.","Agrega tomate y cocina hasta formar un guiso jugoso.","Incorpora el queso y deja que se funda parcialmente.","Sirve con arroz blanco."],
+"frijoles_arroz_huevo":["Calienta los frijoles y el arroz por separado.","Prepara los huevos en sartén.","Sirve arroz y frijoles y coloca los huevos encima.","Termina con tomate y cebolla."],
+"enchiladas_queso":["Prepara una salsa de jitomate y cebolla y cocina hasta que espese ligeramente.","Calienta las tortillas y pásalas por la salsa.","Rellena con queso y dóblalas o enrolla las enchiladas.","Sirve con frijoles y cebolla por encima."],
+"tacos_atun":["Cuece la papa y machácala ligeramente.","Mezcla el atún con la papa, tomate, cebolla y queso.","Rellena las tortillas y dóralas en sartén.","Sirve calientes."],
+}
+for _rid, _pasos in _PREPARACIONES_REALES.items():
+    if _rid in RECETAS_REALES:
+        RECETAS_REALES[_rid]["pasos"] = _pasos
+
 # Metadatos de cocina/estilo. Los platos existentes son principalmente de
 # cocina mexicana/casera; los nuevos tienen su cocina explícita.
 for _rid, _r in RECETAS_REALES.items():
+    _r.setdefault("real", True)
+    _r.setdefault("verificada", False)
     _r.setdefault("cocina", "Mexicana")
     estilos_base = set(_r.get("estilos", []))
     estilos_base.update([_r["cocina"], "Casera"])
@@ -2473,8 +2843,18 @@ def _receta_a_comida(recipe_id, catalogo, tipo):
         p=_producto_para_base(base,catalogo)
         if not p:
             return None
-        ingredientes.append({"producto_id":p["id"],"cantidad_por_persona":cantidad,"unidad":unidad})
-    return {"tipo":tipo,"nombre":r["nombre"],"ingredientes":ingredientes,"preparacion":r["pasos"],"fuente":r["fuente"]}
+        # Algunas recetas expresan latas/paquetes como "pieza", pero la presentación
+        # comercial puede estar expresada en gramos. Convertimos de forma explícita
+        # para que NUNCA desaparezca un ingrediente de la lista de compras.
+        unidad_salida = unidad
+        cantidad_salida = cantidad
+        if str(unidad).lower() in {"pieza", "piezas", "unidad", "unidades"} and str(p.get("unidad_contenido", "")).lower() in {"g", "kg"}:
+            contenido_g = float(p.get("contenido", 0)) * (1000 if str(p.get("unidad_contenido", "")).lower() == "kg" else 1)
+            if contenido_g > 0:
+                cantidad_salida = float(cantidad) * contenido_g
+                unidad_salida = "g"
+        ingredientes.append({"producto_id":p["id"],"cantidad_por_persona":cantidad_salida,"unidad":unidad_salida})
+    return {"tipo":tipo,"nombre":r["nombre"],"ingredientes":ingredientes,"preparacion":r["pasos"],"fuente":r["fuente"],"fuente_url":r.get("fuente_url",""),"verificada":bool(r.get("verificada",False))}
 
 
 def _plan_con_recetas(ids, catalogo, comidas):
@@ -2565,10 +2945,17 @@ def _receta_a_comida(recipe_id, catalogo, tipo):
         p = _producto_para_base(base, catalogo)
         if not p:
             return None
+        unidad_salida = unidad
+        cantidad_salida = cantidad
+        if str(unidad).lower() in {"pieza", "piezas", "unidad", "unidades"} and str(p.get("unidad_contenido", "")).lower() in {"g", "kg"}:
+            contenido_g = float(p.get("contenido", 0)) * (1000 if str(p.get("unidad_contenido", "")).lower() == "kg" else 1)
+            if contenido_g > 0:
+                cantidad_salida = float(cantidad) * contenido_g
+                unidad_salida = "g"
         ingredientes.append({
             "producto_id": p["id"],
-            "cantidad_por_persona": cantidad,
-            "unidad": unidad,
+            "cantidad_por_persona": cantidad_salida,
+            "unidad": unidad_salida,
         })
     return {
         "tipo": tipo,
@@ -2576,6 +2963,8 @@ def _receta_a_comida(recipe_id, catalogo, tipo):
         "ingredientes": ingredientes,
         "preparacion": r["pasos"],
         "fuente": r["fuente"],
+        "fuente_url": r.get("fuente_url", ""),
+        "verificada": bool(r.get("verificada", False)),
     }
 
 
@@ -2632,6 +3021,8 @@ def _generar_plan_local(
     tiene_estufa = "Estufa" in electrodomesticos
 
     def compatible(rid, tipo):
+        if not RECETAS_REALES[rid].get("real", False):
+            return False
         if tipo == "Desayuno":
             if rid not in DESAYUNOS:
                 return False
@@ -2716,6 +3107,27 @@ def _generar_plan_local(
             tortilla_seed = sum(any(x in n for x in ("tortilla", "quesadilla", "enfrijolada", "taco", "enchilada", "flauta", "chilaquiles")) for n in nombres_seed)
             if tortilla_seed > max(5, int(total_slots * 0.30)):
                 continue
+            # La semilla económica también debe respetar la regla de diversidad;
+            # de lo contrario podría saltarse los controles aplicados a la búsqueda aleatoria.
+            principales_seed=[]
+            for row in slots_seed:
+                for rid in row:
+                    if RECETAS_REALES[rid]["tipo"] in ("Comida", "Cena"):
+                        b=_receta_bases(rid)
+                        if "camaron" in b: principales_seed.append("camaron")
+                        elif "pescado" in b: principales_seed.append("pescado")
+                        elif "pollo" in b: principales_seed.append("pollo")
+                        elif "puerco" in b: principales_seed.append("cerdo")
+                        elif b.intersection({"res","molida"}): principales_seed.append("res")
+                        elif "atun" in b: principales_seed.append("atun")
+                        elif "sardina" in b: principales_seed.append("sardina")
+            if principales_seed:
+                atun_seed=principales_seed.count("atun")
+                if atun_seed > max(1, int(math.floor(len(principales_seed)*0.25))):
+                    continue
+                min_seed=2 if float(presupuesto)<1800 else (3 if len(principales_seed)<10 else 4)
+                if len(set(principales_seed)) < min_seed:
+                    continue
             total_seed = _costo_plan(plan_seed, catalogo, personas)
             if total_seed <= presupuesto:
                 distintas = len(set(r for row in slots_seed for r in row))
@@ -2813,11 +3225,48 @@ def _generar_plan_local(
                 elif b.intersection({"res", "molida"}): proteínas.append("res")
                 elif "puerco" in b: proteínas.append("cerdo")
                 elif "pescado" in b: proteínas.append("pescado")
+                elif "camaron" in b: proteínas.append("camaron")
                 elif "atun" in b: proteínas.append("atun")
                 elif "sardina" in b: proteínas.append("sardina")
                 elif "huevo" in b: proteínas.append("huevo")
                 else: proteínas.append("vegetal")
         variedad_proteina = len(set(proteínas))
+        atun_count = proteínas.count("atun")
+        # Diversidad de proteína en las comidas principales. El desayuno puede
+        # usar huevo; la variedad que exigimos aquí se refiere al plato fuerte.
+        principales = []
+        for drow in slots:
+            for rid in drow:
+                if RECETAS_REALES[rid]["tipo"] in ("Comida", "Cena"):
+                    bases_r = _receta_bases(rid)
+                    if "camaron" in bases_r: principales.append("camaron")
+                    elif "pescado" in bases_r: principales.append("pescado")
+                    elif "pollo" in bases_r: principales.append("pollo")
+                    elif "puerco" in bases_r: principales.append("cerdo")
+                    elif bases_r.intersection({"res", "molida"}): principales.append("res")
+                    elif "atun" in bases_r: principales.append("atun")
+                    elif "sardina" in bases_r: principales.append("sardina")
+                    else: principales.append("vegetal")
+        diversidad_principal = len(set(principales))
+        # Atún no puede dominar el menú. En presupuestos normales exigimos al
+        # menos cuatro proteínas distintas en el plato fuerte cuando es viable.
+        # El atún nunca puede ser la proteína dominante del menú.
+        if principales:
+            limite_atun = max(1, int(math.floor(len(principales) * 0.25)))
+            if atun_count > limite_atun:
+                continue
+        # En menús de varios días buscamos mezcla real de proteínas. No exigimos
+        # una variedad imposible en planes muy cortos, pero sí evitamos que todo
+        # termine en un único ingrediente barato.
+        proteinas_carne = {p for p in set(principales) if p in {"pollo","res","cerdo","pescado","camaron","atun","sardina"}}
+        # Con presupuestos muy ajustados mantenemos la mezcla sin volver el plan
+        # matemáticamente imposible: al menos 2 proteínas distintas; con más
+        # margen económico buscamos 3-4.
+        minimo_proteinas = 2 if float(presupuesto) < 1800 else (3 if len(principales) < 10 else 4)
+        if len(principales) >= 4 and len(proteinas_carne) < minimo_proteinas:
+            continue
+        if len(principales) >= 8 and float(presupuesto) >= 1800 and diversidad_principal < 4:
+            continue
         cocinas_objetivo = len(cocinas_usadas.intersection(set(estilos))) if estilos else len(cocinas_usadas)
 
         # Puntuación: primero viabilidad económica, luego variedad y cumplimiento.
@@ -2826,7 +3275,9 @@ def _generar_plan_local(
             - repeticiones * 210
             + len(cocinas_usadas) * 65
             + cocinas_objetivo * 85
-            + variedad_proteina * 60
+            + variedad_proteina * 110
+            + (70 if "camaron" in proteínas else 0)
+            - atun_count * 65
             - tortilla_count * 18
             + rng.random() * 25
         )
@@ -2928,6 +3379,17 @@ html,body,[class*="css"] { font-family:'DM Sans',sans-serif; }
 .section-title { font-family:'Plus Jakarta Sans'; font-size:1.65rem; letter-spacing:-.035em; margin:28px 0 12px; }
 .source { color:#65716a; font-size:.75rem; }
 .small-note { color:#69756e; font-size:.8rem; }
+/* Controles móviles: áreas táctiles grandes y etiquetas visibles. */
+@media (max-width: 768px) {
+  .block-container { padding: .65rem .75rem 2rem; }
+  .hero { min-height: 280px; padding: 28px 22px; border-radius: 24px; }
+  .hero h1 { font-size: 2.35rem; }
+  div[data-baseweb="checkbox"] { min-height: 48px !important; padding: 8px 4px !important; }
+  div[data-baseweb="select"] { min-height: 52px !important; }
+  div[data-testid="stNumberInput"] input { min-height: 52px !important; font-size: 1.05rem !important; }
+  button[kind] { min-height: 50px !important; font-size: 1rem !important; }
+  .mobile-help { display:block; color:#536159; font-size:.86rem; margin:-6px 0 12px; line-height:1.35; }
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -2953,9 +3415,15 @@ for i,tienda in enumerate(TIENDAS_DISPONIBLES):
         if seleccionada: tiendas_seleccionadas.append(tienda)
 
 col1,col2,col3=st.columns(3)
-with col1: dias=st.number_input("📅 Días",1,7,7,1)
-with col2: personas=st.number_input("👨‍👩‍👧‍👦 Personas",1,10,4,1)
-with col3: presupuesto=st.number_input("💰 Presupuesto total (MXN)",200,10000,1500,100)
+with col1:
+    dias=st.number_input("📅 Días",1,7,7,1)
+    st.markdown("<div class='mobile-help'>Cuántos días quieres planear. KashCook generará exactamente esa cantidad.</div>",unsafe_allow_html=True)
+with col2:
+    personas=st.number_input("👨‍👩‍👧‍👦 Personas",1,10,4,1)
+    st.markdown("<div class='mobile-help'>Número de personas que comerán. Las cantidades se escalan para todos.</div>",unsafe_allow_html=True)
+with col3:
+    presupuesto=st.number_input("💰 Presupuesto total (MXN)",200,10000,1500,100)
+    st.markdown("<div class='mobile-help'>Monto máximo disponible para la compra del menú completo.</div>",unsafe_allow_html=True)
 
 col1,col2=st.columns(2)
 with col1:
@@ -2991,20 +3459,46 @@ if generar_menu:
         st.error("Selecciona al menos una tienda.")
         st.stop()
     catalogo=[]
-    for tienda in tiendas_seleccionadas: catalogo.extend(CATALOGOS.get(tienda,[]))
+    for tienda in tiendas_seleccionadas: catalogo.extend(copy.deepcopy(CATALOGOS.get(tienda,[])))
     if not catalogo:
         st.error("No hay productos disponibles para las tiendas seleccionadas.")
         st.stop()
-    with st.spinner("KashCook está construyendo un menú real y ajustándolo al presupuesto..."):
+    with st.spinner("KashCook está construyendo el menú, verificando recetas, cantidades y precios actuales..."):
         try:
-            plan,total=generar_plan_seguro(dias=int(dias),personas=int(personas),presupuesto=float(presupuesto),comidas=comidas,catalogo=catalogo,estilos=estilos,electrodomesticos=electrodomesticos,restricciones=restricciones)
+            # Primero construimos una propuesta con la biblioteca de recetas reales.
+            plan,total_ref=generar_plan_seguro(dias=int(dias),personas=int(personas),presupuesto=float(presupuesto),comidas=comidas,catalogo=catalogo,estilos=estilos,electrodomesticos=electrodomesticos,restricciones=restricciones)
+
+            # Verificamos SOLO los ingredientes que realmente aparecen en el menú.
+            ids_necesarios={
+                ing.get("producto_id")
+                for dia in plan.get("dias",[])
+                for comida in dia.get("comidas",[])
+                for ing in comida.get("ingredientes",[])
+                if ing.get("producto_id")
+            }
+            bases_necesarias={
+                p.get("ingrediente_base")
+                for p in catalogo
+                if p.get("id") in ids_necesarios
+            }
+            catalogo_verificado=verificar_precios_tiendas(catalogo,bases_necesarias,ids_necesarios)
+            compra,total=calcular_compra(plan,catalogo_verificado,personas)
+            validar_precios_verificados(compra)
+            if total > float(presupuesto) + TOLERANCIA_PRESUPUESTO:
+                raise ValueError(
+                    f"Con los precios verificados hoy, la compra completa cuesta ${total:,.2f}; "
+                    f"el presupuesto es ${float(presupuesto):,.2f}. KashCook no reducirá porciones ni sustituirá precios reales para aparentar que alcanza."
+                )
+
             st.session_state["plan"]=plan
-            st.session_state["compra"]=calcular_compra(plan,catalogo,personas)[0]
+            st.session_state["compra"]=compra
             st.session_state["total"]=total
+            st.session_state["catalogo_verificado"]=catalogo_verificado
             st.session_state["presupuesto"]=presupuesto
             st.session_state["personas"]=personas
             st.session_state["tiendas"]=tiendas_seleccionadas
-            st.success("Plan generado correctamente con recetas reales.")
+            st.session_state["precios_verificados_en"]=datetime.now().astimezone().isoformat(timespec="minutes")
+            st.success("Plan generado con recetas reales, porciones escaladas y precios verificados en la consulta.")
         except Exception as e:
             st.error(f"Ocurrió un error al generar el plan: {e}")
 
@@ -3027,25 +3521,33 @@ if "plan" in st.session_state:
         util=(total/presupuesto*100) if presupuesto else 0
         st.markdown(f"<div class='metric-card'><div class='metric-label'>Uso del presupuesto</div><div class='metric-value'>{util:.0f}%</div></div>",unsafe_allow_html=True)
 
-    st.markdown("<div class='card'><b>ℹ️ KashCook utiliza recetas de una biblioteca real y calcula la compra agrupando ingredientes y respetando presentaciones comerciales. Los precios del catálogo son referencias para planificación y no se presentan como precios de caja en tiempo real.</b></div>", unsafe_allow_html=True)
+    verif_hora=st.session_state.get("precios_verificados_en", "consulta actual")
+    st.markdown(f"<div class='card'><b>🟢 Precios verificados en esta consulta:</b> {verif_hora}. KashCook no utiliza precios de referencia para cerrar el total. Si un producto no puede verificarse, el plan no se presenta como total real.</div>", unsafe_allow_html=True)
 
     tabs=st.tabs(["🍽️ Menú","🛒 Compras","💰 Presupuesto","👨‍🍳 Recetas","📄 PDF"])
-    catalogo_global=[]
-    for lista in CATALOGOS.values(): catalogo_global.extend(lista)
+    catalogo_global = st.session_state.get("catalogo_verificado", []) or []
+    if not catalogo_global:
+        for lista in CATALOGOS.values():
+            catalogo_global.extend(lista)
     productos_por_id={p["id"]:p for p in catalogo_global}
 
     with tabs[0]:
         for dia in plan.get("dias",[]):
             st.markdown(f"<div class='day-card'><h3>Día {dia.get('dia','')}</h3>",unsafe_allow_html=True)
             for comida in dia.get("comidas",[]):
-                pills="".join([f"<span class='pill'>{productos_por_id.get(x.get('producto_id'),{}).get('nombre',x.get('producto_id'))} · {x.get('cantidad_por_persona')} {x.get('unidad')}</span>" for x in comida.get('ingredientes',[])])
+                pills="".join([f"<span class='pill'>{productos_por_id.get(x.get('producto_id'),{}).get('nombre',x.get('producto_id'))} · {x.get('cantidad_por_persona')} {x.get('unidad')} p/p · {float(x.get('cantidad_por_persona',0))*personas:g} {x.get('unidad')} total</span>" for x in comida.get('ingredientes',[])])
                 st.markdown(f"<div class='meal'><div class='meal-title'>{comida.get('tipo','Comida')} · {comida.get('nombre','')}</div>{pills}</div>",unsafe_allow_html=True)
-                if comida.get("fuente"): st.markdown(f"<div class='source'>Referencia culinaria: {comida.get('fuente')}</div>",unsafe_allow_html=True)
+                if comida.get("fuente"):
+                    ver="✓ Fuente verificada" if comida.get("verificada") else "✓ Receta real de biblioteca culinaria"
+                    st.markdown(f"<div class='source'>{ver}: {comida.get('fuente')}</div>",unsafe_allow_html=True)
             st.markdown("</div>",unsafe_allow_html=True)
 
     with tabs[1]:
+        st.info("La lista de compras se calcula sumando los ingredientes de TODOS los días y convirtiéndolos a presentaciones comerciales. Si un ingrediente aparece en una receta, debe aparecer aquí o el menú se considera inválido.")
         for x in compra:
-            st.markdown(f"<div class='card'><h3>{x['producto']}</h3><div class='muted'>{x['presentacion']} · {x['paquetes']} paquete(s) · {x['tienda']}</div><p><b>${x['precio_unitario']:,.2f} c/u</b> · subtotal <b>${x['subtotal']:,.2f}</b></p></div>",unsafe_allow_html=True)
+            estado=x.get("estado_precio","Referencia")
+            marca="🟢 Precio verificado" if estado=="Verificado" else "🔴 Precio no disponible"
+            st.markdown(f"<div class='card'><h3>{x['producto']}</h3><div class='muted'>{x['presentacion']} · {((f"{x['paquetes']:.2f} kg requeridos" if x.get('estado_precio')=="Verificado" and x.get('unidad')=="g" and x.get('paquetes',0)<10 else f"{x['paquetes']} paquete(s)"))} · {x['tienda']}</div><p><b>${x['precio_unitario']:,.2f} c/u</b> · subtotal <b>${x['subtotal']:,.2f}</b></p><div class='small-note'>{marca} · {x.get('ultima_verificacion','')}</div></div>",unsafe_allow_html=True)
 
     with tabs[2]:
         restante=presupuesto-total
@@ -3060,14 +3562,20 @@ if "plan" in st.session_state:
             st.markdown(f"### Día {dia.get('dia','')}")
             for comida in dia.get("comidas",[]):
                 st.markdown(f"#### {comida.get('tipo','Comida')}: {comida.get('nombre','')}")
-                if comida.get("fuente"): st.caption(f"Referencia: {comida.get('fuente')}")
+                if comida.get("fuente"):
+                    st.caption(("✓ Fuente verificada: " if comida.get("verificada") else "✓ Receta real de biblioteca: ") + comida.get("fuente"))
+                    if comida.get("fuente_url"):
+                        st.markdown(f"[Ver receta original ↗]({comida.get('fuente_url')})")
                 st.markdown("**Ingredientes por persona:**")
                 for ing in comida.get("ingredientes",[]):
                     p=productos_por_id.get(ing.get("producto_id")); nombre=p["nombre"] if p else str(ing.get("producto_id"))
-                    st.write(f"- {nombre}: {ing.get('cantidad_por_persona','')} {ing.get('unidad','')}")
+                    cant=float(ing.get('cantidad_por_persona',0) or 0)
+                    unidad=ing.get('unidad','')
+                    st.write(f"- {nombre}: {cant:g} {unidad} por persona · **{cant*personas:g} {unidad} para {personas} personas**")
                 st.markdown("**Preparación:**")
                 for n,paso in enumerate(comida.get("preparacion",[]) or [],1): st.write(f"{n}. {paso}")
 
     with tabs[4]:
         pdf_bytes=generar_pdf(plan=plan,compra=compra,total=total,presupuesto=presupuesto,personas=personas,tiendas=tiendas)
         st.download_button("📄 Descargar plan completo en PDF",data=pdf_bytes,file_name="KashCook_AI_Plan.pdf",mime="application/pdf",use_container_width=True)
+
