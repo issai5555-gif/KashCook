@@ -1459,60 +1459,130 @@ def _extraer_candidatos_oficiales(html_text, query, tienda, pagina_url):
     return candidatos[:80]
 
 
-def _buscar_candidatos_tienda(tienda, ingrediente_base):
-    """Busca candidatos reales de una tienda con una estrategia rápida.
-
-    Usa primero una sola URL de búsqueda. Solo intenta una alternativa si la
-    primera no devuelve productos. Los resultados quedan cacheados para no
-    volver a consultar la misma combinación durante la sesión.
+def _extraer_candidatos_lineas(html_text, query, tienda, pagina_url):
+    """Fallback robusto para páginas cuyo contenido no está en JSON-LD.
+    Usa texto visible y líneas cercanas al precio; el precio sigue saliendo
+    exclusivamente del dominio oficial consultado.
     """
-    consulta = CONSULTAS_PRECIO.get(ingrediente_base, ingrediente_base.replace("_", " "))
-    clave = ("candidatos", tienda, ingrediente_base)
-    ahora = time.time()
-    cache = PRECIO_CACHE.get(clave)
-    if cache and ahora - cache["ts"] < PRECIO_CACHE_TTL:
-        return cache["resultado"]
-
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/154 Safari/537.36",
-        "Accept-Language": "es-MX,es;q=0.9,en;q=0.8",
-        "Accept": "text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8",
-    }
-    candidatos = []
-    errores = []
-    plantillas = BUSQUEDAS_TIENDA.get(tienda, [])
-    # Primera URL: rápida. Segunda URL: solo como respaldo.
-    for plantilla in plantillas[:2]:
-        url = plantilla.format(q=quote_plus(consulta))
-        try:
-            r = requests.get(url, headers=headers, timeout=4.5, allow_redirects=True)
-            dominio = DOMINIOS_OFICIALES[tienda]
-            if r.status_code != 200 or dominio not in r.url:
-                errores.append(f"HTTP {r.status_code}")
+    soup = BeautifulSoup(html_text, "html.parser")
+    for bad in soup(["script", "style", "noscript"]):
+        bad.decompose()
+    raw_lines = [re.sub(r"\s+", " ", x).strip() for x in soup.stripped_strings]
+    lines = [x for x in raw_lines if x]
+    tokens = [t for t in normalizar_texto(query).split() if len(t) >= 3]
+    out=[]; seen=set()
+    for i,line in enumerate(lines):
+        window=" ".join(lines[max(0,i-2):min(len(lines),i+3)])
+        norm=normalizar_texto(window)
+        if tokens and not any(t in norm for t in tokens):
+            continue
+        pm=re.search(r"\$\s*([0-9]{1,5}(?:[,][0-9]{3})*(?:\.[0-9]{1,2})?)", window)
+        if not pm:
+            continue
+        precio=_precio_float(pm.group(1))
+        if not precio or not (1 <= precio <= 10000):
+            continue
+        contenido,unidad,pres=_inferir_presentacion_producto(window)
+        if not contenido:
+            # Frescos vendidos por peso: solo aceptamos si el propio texto lo indica.
+            if re.search(r"\bpor\s*(kg|kilo|kilogramo)|\b\$/?\s*kg\b", normalizar_texto(window)):
+                contenido,unidad,pres=1.0,"kg","1 kg"
+            else:
                 continue
-            encontrados = _extraer_candidatos_oficiales(r.text, consulta, tienda, r.url)
-            if encontrados:
-                candidatos.extend(encontrados)
-                break
+        # El nombre suele estar antes del precio; quitamos mensajes de UI.
+        nombre=window[:window.find(pm.group(0))].strip(" -|•:")[-220:]
+        if len(nombre)<4:
+            continue
+        marca=_marca_desde_producto(nombre)
+        key=(normalizar_texto(nombre),round(precio,2),contenido,unidad)
+        if key in seen: continue
+        seen.add(key)
+        out.append({"nombre":nombre,"marca":marca,"precio":round(precio,2),
+                    "contenido":float(contenido),"unidad_contenido":unidad,
+                    "presentacion":pres or f"{contenido:g} {unidad}",
+                    "fuente_precio":pagina_url,"tienda":tienda})
+    return out[:60]
+
+
+def _extraer_enlaces_productos(html_text, query, tienda, pagina_url):
+    """Obtiene enlaces oficiales de producto para una segunda pasada.
+    No toma precios del buscador; solo descubre URLs del mismo dominio."""
+    soup=BeautifulSoup(html_text,"html.parser")
+    dominio=DOMINIOS_OFICIALES.get(tienda,"")
+    tokens=[t for t in normalizar_texto(query).split() if len(t)>=3]
+    links=[]; seen=set()
+    for a in soup.find_all("a", href=True):
+        texto=normalizar_texto(a.get_text(" ",strip=True))
+        href=a.get("href","")
+        if tokens and not any(t in texto for t in tokens):
+            continue
+        if not href: continue
+        if href.startswith("/"):
+            href=requests.compat.urljoin(pagina_url,href)
+        if dominio not in href: continue
+        if not any(x in href.lower() for x in ("/producto/","/ip/","/product","/p/")):
+            continue
+        if href in seen: continue
+        seen.add(href); links.append(href)
+        if len(links)>=8: break
+    return links
+
+
+def _buscar_candidatos_tienda(tienda, ingrediente_base):
+    """Busca productos reales con pocas consultas y varios fallbacks.
+    Solo trabaja sobre un ingrediente solicitado y cachea el resultado."""
+    consulta=CONSULTAS_PRECIO.get(ingrediente_base, ingrediente_base.replace("_"," "))
+    clave=("candidatos",tienda,ingrediente_base)
+    ahora=time.time()
+    cache=PRECIO_CACHE.get(clave)
+    if cache and ahora-cache["ts"]<PRECIO_CACHE_TTL:
+        return cache["resultado"]
+    headers={"User-Agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/154 Safari/537.36",
+             "Accept-Language":"es-MX,es;q=0.9,en;q=0.8","Accept":"text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8"}
+    candidatos=[]; errores=[]
+    # Usamos solo una URL primaria; la segunda se consulta únicamente si no hubo resultados.
+    plantillas=BUSQUEDAS_TIENDA.get(tienda,[])
+    for idx,plantilla in enumerate(plantillas[:2]):
+        url=plantilla.format(q=quote_plus(consulta))
+        try:
+            r=requests.get(url,headers=headers,timeout=3.5,allow_redirects=True)
+            dominio=DOMINIOS_OFICIALES.get(tienda,"")
+            if r.status_code!=200 or dominio not in r.url:
+                errores.append(f"HTTP {r.status_code}"); continue
+            candidatos.extend(_extraer_candidatos_oficiales(r.text,consulta,tienda,r.url))
+            if not candidatos:
+                candidatos.extend(_extraer_candidatos_lineas(r.text,consulta,tienda,r.url))
+            # Si aún no hay candidatos, abrimos unas pocas páginas de producto oficiales.
+            if not candidatos:
+                enlaces=_extraer_enlaces_productos(r.text,consulta,tienda,r.url)
+                def fetch(u):
+                    try:
+                        rr=requests.get(u,headers=headers,timeout=3.5,allow_redirects=True)
+                        if rr.status_code==200 and dominio in rr.url:
+                            return _extraer_candidatos_oficiales(rr.text,consulta,tienda,rr.url) or _extraer_candidatos_lineas(rr.text,consulta,tienda,rr.url)
+                    except Exception:
+                        return []
+                    return []
+                if enlaces:
+                    with ThreadPoolExecutor(max_workers=min(4,len(enlaces))) as ex:
+                        for fut in as_completed([ex.submit(fetch,u) for u in enlaces]):
+                            candidatos.extend(fut.result())
+            if candidatos: break
             errores.append("sin productos identificables")
         except Exception as exc:
             errores.append(str(exc)[:80])
-
-    unicos = {}
+    unicos={}
     for c in candidatos:
-        clave_c = (normalizar_texto(c["nombre"]), c["contenido"], c["unidad_contenido"])
-        anterior = unicos.get(clave_c)
-        if anterior is None or c["precio"] < anterior["precio"]:
-            unicos[clave_c] = c
-
-    resultado = {
-        "candidatos": sorted(unicos.values(), key=lambda x: x["precio"]),
-        "ultima_verificacion": datetime.now().astimezone().isoformat(timespec="minutes"),
-        "fuente": (next(iter(unicos.values())).get("fuente_precio", DOMINIOS_OFICIALES.get(tienda, ""))
-                   if unicos else DOMINIOS_OFICIALES.get(tienda, "")),
-        "error": "; ".join(errores[-2:]),
-    }
-    PRECIO_CACHE[clave] = {"ts": ahora, "resultado": resultado}
+        if not _candidato_compatible_base(c,{"ingrediente_base":ingrediente_base}):
+            continue
+        key=(normalizar_texto(c.get("nombre","")),c.get("contenido"),c.get("unidad_contenido"))
+        if key not in unicos or c.get("precio",10**9)<unicos[key].get("precio",10**9):
+            unicos[key]=c
+    resultado={"candidatos":sorted(unicos.values(),key=lambda x:x.get("precio",10**9))[:40],
+               "ultima_verificacion":datetime.now().astimezone().isoformat(timespec="minutes"),
+               "fuente":(next(iter(unicos.values())).get("fuente_precio",DOMINIOS_OFICIALES.get(tienda,"")) if unicos else DOMINIOS_OFICIALES.get(tienda,"")),
+               "error":"; ".join(errores[-2:])}
+    PRECIO_CACHE[clave]={"ts":ahora,"resultado":resultado}
     return resultado
 
 
@@ -3549,7 +3619,7 @@ def _generar_plan_local(
     # encontrar una combinación REALMENTE barata antes de optimizar variedad.
     # Esto evita declarar imposible un presupuesto por haber explorado solo una
     # fracción del espacio de combinaciones.
-    iteraciones_busqueda = 50000 if float(presupuesto) <= 2500 else 30000
+    iteraciones_busqueda = 12000 if float(presupuesto) <= 2500 else 8000
     for _ in range(iteraciones_busqueda):
         usados = []
         slots = []
@@ -3883,63 +3953,56 @@ if generar_menu:
         st.error("Selecciona al menos una tienda.")
         st.stop()
     catalogo=[]
-    for tienda in tiendas_seleccionadas: catalogo.extend(copy.deepcopy(CATALOGOS.get(tienda,[])))
+    for tienda in tiendas_seleccionadas:
+        catalogo.extend(copy.deepcopy(CATALOGOS.get(tienda,[])))
     if not catalogo:
         st.error("No hay productos disponibles para las tiendas seleccionadas.")
         st.stop()
-    with st.spinner("KashCook está buscando productos, comparando marcas y construyendo el menú más económico posible..."):
+    with st.spinner("KashCook está construyendo el menú y después verificará únicamente los productos que realmente necesita..."):
         try:
-            # Una sola fase de precios: se buscan en paralelo los productos de
-            # todas las bases necesarias. Así evitamos la antigua secuencia
-            # menú → buscar precios → volver a generar menú → volver a verificar.
-            # El motor puede elegir desde el principio entre marcas propias,
-            # económicas y conocidas.
-            catalogo_optimizado = construir_catalogo_productos_optimo(
-                catalogo, bases_necesarias=None, presupuesto=float(presupuesto)
-            )
+            # ETAPA 1: menú. NO hacemos búsquedas web todavía. Esto evita decenas
+            # de consultas por ingredientes que finalmente ni siquiera se compran.
+            # El presupuesto de planificación es deliberadamente un margen de búsqueda;
+            # el presupuesto real solo se valida después con precios verificados.
+            presupuesto_planificacion=max(float(presupuesto)*1.35, float(presupuesto)+250.0)
+            try:
+                plan,_=_generar_plan_local(
+                    dias=int(dias),personas=int(personas),presupuesto=presupuesto_planificacion,
+                    comidas=comidas,catalogo=catalogo,estilos=estilos,
+                    electrodomesticos=electrodomesticos,restricciones=restricciones)
+            except ValueError:
+                presupuesto_planificacion=max(float(presupuesto)*1.60, float(presupuesto)+450.0)
+                plan,_=_generar_plan_local(
+                    dias=int(dias),personas=int(personas),presupuesto=presupuesto_planificacion,
+                    comidas=comidas,catalogo=catalogo,estilos=estilos,
+                    electrodomesticos=electrodomesticos,restricciones=restricciones)
 
-            plan, total_ref = generar_plan_seguro(
-                dias=int(dias), personas=int(personas), presupuesto=float(presupuesto),
-                comidas=comidas, catalogo=catalogo_optimizado, estilos=estilos,
-                electrodomesticos=electrodomesticos, restricciones=restricciones
-            )
+            bases_necesarias=sorted({base for dia in plan.get("dias",[]) for comida in dia.get("comidas",[])
+                                     for ing in comida.get("ingredientes",[])
+                                     for base in [next((p.get("ingrediente_base") for p in catalogo if p.get("id")==ing.get("producto_id")),None)] if base})
 
-            # El menú ya se construyó usando productos verificados siempre que
-            # estuvieron disponibles. Validamos una última vez solo los productos
-            # realmente comprados; no hacemos nuevas búsquedas web aquí.
-            ids_necesarios = {
-                ing.get("producto_id")
-                for dia in plan.get("dias", [])
-                for comida in dia.get("comidas", [])
-                for ing in comida.get("ingredientes", [])
-                if ing.get("producto_id")
-            }
-            catalogo_verificado = verificar_precios_tiendas(
-                catalogo_optimizado,
-                {p.get("ingrediente_base") for p in catalogo_optimizado if p.get("id") in ids_necesarios},
-                ids_necesarios
-            )
-            # El buscador web no puede decidir si existe una receta. Ahora sí
-            # reasignamos cada ingrediente del menú a la mejor marca/presentación
-            # que fue verificada en la tienda seleccionada.
-            plan = _reemplazar_productos_por_verificados(plan, catalogo_verificado)
-            compra, total = calcular_compra(plan, catalogo_verificado, personas)
+            # ETAPA 2: precios. Solo buscamos los ingredientes del menú elegido.
+            # Las consultas se hacen en paralelo y se guardan en caché.
+            catalogo_optimizado=construir_catalogo_productos_optimo(
+                catalogo,bases_necesarias=bases_necesarias,presupuesto=float(presupuesto))
+
+            plan=_reemplazar_productos_por_verificados(plan,catalogo_optimizado)
+            compra,total=calcular_compra(plan,catalogo_optimizado,personas)
             validar_precios_verificados(compra)
 
-            if total > float(presupuesto) + TOLERANCIA_PRESUPUESTO:
+            if total>float(presupuesto)+TOLERANCIA_PRESUPUESTO:
                 raise ValueError(
                     f"Con los precios verificados hoy, la compra completa cuesta ${total:,.2f}; "
-                    f"el presupuesto es ${float(presupuesto):,.2f}. KashCook no reducirá porciones ni sustituirá precios reales para aparentar que alcanza."
-                )
+                    f"el presupuesto es ${float(presupuesto):,.2f}. KashCook no reducirá porciones ni sustituirá precios reales para aparentar que alcanza.")
 
-            st.session_state["plan"] = plan
-            st.session_state["compra"] = compra
-            st.session_state["total"] = total
-            st.session_state["catalogo_verificado"] = catalogo_verificado
-            st.session_state["presupuesto"] = presupuesto
-            st.session_state["personas"] = personas
-            st.session_state["tiendas"] = tiendas_seleccionadas
-            st.session_state["precios_verificados_en"] = datetime.now().astimezone().isoformat(timespec="minutes")
+            st.session_state["plan"]=plan
+            st.session_state["compra"]=compra
+            st.session_state["total"]=total
+            st.session_state["catalogo_verificado"]=catalogo_optimizado
+            st.session_state["presupuesto"]=presupuesto
+            st.session_state["personas"]=personas
+            st.session_state["tiendas"]=tiendas_seleccionadas
+            st.session_state["precios_verificados_en"]=datetime.now().astimezone().isoformat(timespec="minutes")
             st.success("Plan generado con recetas reales, porciones escaladas y productos/marcas verificados en la consulta.")
         except Exception as e:
             st.error(f"Ocurrió un error al generar el plan: {e}")
