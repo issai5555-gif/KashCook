@@ -1989,16 +1989,20 @@ def _reemplazar_productos_por_verificados(plan, catalogo_verificado):
 
 
 def validar_precios_verificados(compra):
+    """Devuelve el estado de verificacion sin bloquear la generacion del plan.
+
+    Una falla del scraping de una tienda no debe impedir que KashCook entregue
+    el menu y la lista de compras. Los items no verificados quedan claramente
+    marcados y el total se considera PROVISIONAL.
+    """
     faltantes = [x for x in compra if x.get("estado_precio") != "Verificado"]
-    if faltantes:
-        nombres = ", ".join(x.get("producto", "producto") for x in faltantes[:8])
-        extra = "..." if len(faltantes) > 8 else ""
-        raise ValueError(
-            "No es posible entregar un total como precio real de hoy porque KashCook no pudo verificar "
-            f"estos productos en la tienda seleccionada: {nombres}{extra}. "
-            "No se utilizaron precios de referencia para ocultar el faltante."
-        )
-    return True
+    verificados = [x for x in compra if x.get("estado_precio") == "Verificado"]
+    return {
+        "ok": not faltantes,
+        "verificados": len(verificados),
+        "faltantes": len(faltantes),
+        "nombres_faltantes": [x.get("producto", "producto") for x in faltantes],
+    }
 
 
 # ============================================================
@@ -4199,9 +4203,14 @@ if generar_menu:
 
             plan=_reemplazar_productos_por_verificados(plan,catalogo_optimizado)
             compra,total=calcular_compra(plan,catalogo_optimizado,personas)
-            validar_precios_verificados(compra)
+            estado_verificacion=validar_precios_verificados(compra)
 
-            if total>float(presupuesto)+TOLERANCIA_PRESUPUESTO:
+            # IMPORTANTE: una falla de una tienda no bloquea el producto completo.
+            # Si hay precios no verificados, el total se conserva como PROVISIONAL
+            # y cada articulo queda marcado en la lista. Solo un total 100%
+            # verificado puede mostrarse como precio real de hoy.
+            total_verificado=estado_verificacion["ok"]
+            if total_verificado and total>float(presupuesto)+TOLERANCIA_PRESUPUESTO:
                 raise ValueError(
                     f"Con los precios verificados hoy, la compra completa cuesta ${total:,.2f}; "
                     f"el presupuesto es ${float(presupuesto):,.2f}. KashCook no reducirá porciones ni sustituirá precios reales para aparentar que alcanza.")
@@ -4210,11 +4219,16 @@ if generar_menu:
             st.session_state["compra"]=compra
             st.session_state["total"]=total
             st.session_state["catalogo_verificado"]=catalogo_optimizado
+            st.session_state["estado_verificacion"]=estado_verificacion
+            st.session_state["total_es_real"]=total_verificado
             st.session_state["presupuesto"]=presupuesto
             st.session_state["personas"]=personas
             st.session_state["tiendas"]=tiendas_seleccionadas
             st.session_state["precios_verificados_en"]=datetime.now().astimezone().isoformat(timespec="minutes")
-            st.success("Plan generado con recetas reales, porciones escaladas y productos/marcas verificados en la consulta.")
+            if total_verificado:
+                st.success("Plan generado con recetas reales, porciones escaladas y productos/marcas verificados en la consulta.")
+            else:
+                st.warning("Plan generado correctamente. Algunos precios no pudieron verificarse automáticamente; el total mostrado es PROVISIONAL y cada pendiente está marcado en Compras.")
         except Exception as e:
             st.error(f"Ocurrió un error al generar el plan: {e}")
 
@@ -4239,7 +4253,16 @@ if "plan" in st.session_state:
         st.markdown(f"<div class='metric-card'><div class='metric-label'>Uso del presupuesto</div><div class='metric-value'>{util:.0f}%</div></div>",unsafe_allow_html=True)
 
     verif_hora=st.session_state.get("precios_verificados_en", "consulta actual")
-    st.markdown(f"<div class='card'><b>🟢 Precios verificados en esta consulta:</b> {verif_hora}. KashCook no utiliza precios de referencia para cerrar el total. Si un producto no puede verificarse, el plan no se presenta como total real.</div>", unsafe_allow_html=True)
+    estado_verif=st.session_state.get("estado_verificacion", {}) or {}
+    total_es_real=bool(st.session_state.get("total_es_real", False))
+    nver=estado_verif.get("verificados", 0)
+    nfalta=estado_verif.get("faltantes", 0)
+    if total_es_real:
+        st.markdown(f"<div class='card'><b>🟢 Precio real verificado:</b> todos los productos de esta compra fueron verificados en la consulta de {verif_hora}.</div>", unsafe_allow_html=True)
+    else:
+        faltas=", ".join(estado_verif.get("nombres_faltantes", [])[:6])
+        if len(estado_verif.get("nombres_faltantes", []))>6: faltas += "..."
+        st.markdown(f"<div class='card'><b>🟠 Total provisional:</b> {nver} productos verificados y {nfalta} sin verificación automática. El menú y la compra sí están disponibles; los productos sin verificación aparecen marcados. <b>No se presenta este total como precio real de hoy.</b>{('<br><span class=\"small-note\">Pendientes: '+faltas+'</span>') if faltas else ''}</div>", unsafe_allow_html=True)
 
     tabs=st.tabs(["🍽️ Menú","🛒 Compras","💰 Presupuesto","👨‍🍳 Recetas","📄 PDF"])
     catalogo_global = st.session_state.get("catalogo_verificado", []) or []
@@ -4263,7 +4286,7 @@ if "plan" in st.session_state:
         st.info("La lista de compras se calcula sumando los ingredientes de TODOS los días y convirtiéndolos a presentaciones comerciales. Si un ingrediente aparece en una receta, debe aparecer aquí o el menú se considera inválido.")
         for x in compra:
             estado=x.get("estado_precio","Referencia")
-            marca_estado="🟢 Precio verificado" if estado=="Verificado" else "🔴 Precio no disponible"
+            marca_estado="🟢 Precio verificado" if estado=="Verificado" else "🟠 Precio de referencia · verificar en tienda"
             # El nombre viene de la ficha real; la marca se muestra además por separado
             # para que el usuario sepa exactamente qué buscar en el supermercado.
             p_catalogo=productos_por_id.get(x.get("producto_id"), {})
