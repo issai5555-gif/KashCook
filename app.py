@@ -3148,7 +3148,12 @@ def _generar_plan_local(
 
     # Muchas combinaciones pequeñas son más útiles que una sola llamada enorme
     # al LLM y no dependen de un JSON de siete días.
-    for _ in range(12000):
+    # Búsqueda ampliada: cuando el presupuesto es ajustado, la prioridad es
+    # encontrar una combinación REALMENTE barata antes de optimizar variedad.
+    # Esto evita declarar imposible un presupuesto por haber explorado solo una
+    # fracción del espacio de combinaciones.
+    iteraciones_busqueda = 50000 if float(presupuesto) <= 2500 else 30000
+    for _ in range(iteraciones_busqueda):
         usados = []
         slots = []
         conteo = {}
@@ -3183,12 +3188,29 @@ def _generar_plan_local(
                     if faltantes and rng.random() < 0.72:
                         elegibles = faltantes
 
-                # Una pequeña preferencia económica evita que el presupuesto se
-                # consuma demasiado pronto, sin convertir el menú en comida repetitiva.
-                elegibles = sorted(
-                    elegibles,
-                    key=lambda x: (costo_individual.get(x, 10**9) * (0.75 + rng.random() * 0.5))
-                )[:max(5, min(14, len(elegibles)))]
+                # Selección consciente del COSTO AGRUPADO. Una receta que comparte
+                # ingredientes con lo ya elegido suele costar menos en la compra
+                # semanal porque evita abrir nuevas presentaciones comerciales.
+                bases_usadas = set()
+                for y in usados:
+                    bases_usadas.update(_receta_bases(y))
+
+                def costo_heuristico(x):
+                    bases_x = _receta_bases(x)
+                    compartidos = len(bases_x.intersection(bases_usadas))
+                    costo = costo_individual.get(x, 10**9)
+                    # El bono por compartir ingredientes es deliberadamente
+                    # moderado: favorece aprovechamiento sin convertir todo el menú
+                    # en la misma receta.
+                    bono_compartir = compartidos * (45 if float(presupuesto) <= 2500 else 28)
+                    ruido = rng.random() * max(8.0, costo * 0.18)
+                    return costo - bono_compartir + ruido
+
+                elegibles = sorted(elegibles, key=costo_heuristico)
+                # En presupuesto ajustado concentramos la elección en opciones
+                # económicas; con mayor margen dejamos más espacio a variedad.
+                ancho = 7 if float(presupuesto) <= 1800 else (10 if float(presupuesto) <= 2500 else 14)
+                elegibles = elegibles[:max(5, min(ancho, len(elegibles)))]
                 rid = rng.choice(elegibles)
                 fila.append(rid)
                 usados.append(rid)
@@ -3287,7 +3309,12 @@ def _generar_plan_local(
             score -= (total - presupuesto) * 18
 
         candidato = (plan, total, score)
-        if score > mejor_global_score:
+        # Para el diagnóstico de presupuesto, "mejor global" significa el
+        # MENOR COSTO encontrado, no el menú con mayor puntuación estética.
+        # Antes esto podía reportar $2,096 aunque otra combinación más barata
+        # ya hubiera sido explorada. En empate sí usamos variedad como desempate.
+        if (mejor_global is None or total < mejor_global[1] - 0.01 or
+                (abs(total - mejor_global[1]) <= 0.01 and score > mejor_global_score)):
             mejor_global_score = score
             mejor_global = candidato
 
@@ -3578,4 +3605,3 @@ if "plan" in st.session_state:
     with tabs[4]:
         pdf_bytes=generar_pdf(plan=plan,compra=compra,total=total,presupuesto=presupuesto,personas=personas,tiendas=tiendas)
         st.download_button("📄 Descargar plan completo en PDF",data=pdf_bytes,file_name="KashCook_AI_Plan.pdf",mime="application/pdf",use_container_width=True)
-
