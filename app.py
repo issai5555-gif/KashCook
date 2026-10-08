@@ -1689,118 +1689,170 @@ def _consultar_url_oficial_producto(url, tienda, consulta, headers):
     return []
 
 
-def _consultar_con_reader_oficial(tienda, ingrediente_base, headers):
-    """Fallback para tiendas cuyo buscador es renderizado por JavaScript.
+def _extraer_urls_oficiales_desde_texto(texto, tienda, max_urls=8):
+    """Extrae enlaces de producto del contenido devuelto por Jina/HTML.
 
-    Jina Reader solo actúa como transporte/lector de la URL OFICIAL de la tienda;
-    el dato se considera verificable únicamente si el contenido recibido sigue
-    correspondiendo al dominio oficial y contiene nombre + presentación + precio.
-    No se consulta un catálogo de terceros ni se usa un precio del buscador.
+    Jina puede devolver Markdown en vez de HTML. Por eso no dependemos de
+    BeautifulSoup: primero buscamos cualquier URL y después validamos que
+    pertenezca al dominio oficial de la tienda y tenga pinta de producto.
+    """
+    dominio = DOMINIOS_OFICIALES.get(tienda, "")
+    if not dominio or not texto:
+        return []
+    encontrados = re.findall(r'https?://[^\s\)\]<>"\']+', texto)
+    urls=[]; seen=set()
+    for href in encontrados:
+        href = href.rstrip('.,;:')
+        if dominio not in href:
+            continue
+        low = href.lower()
+        if any(x in low for x in ("/login", "/carrito", "/cart", "/ayuda", "/contacto", "/buscar", "/search")):
+            continue
+        # Los supermercados usan rutas distintas: /ip/, /producto/, /p/,
+        # /products/, /catalog/, etc. No exigimos una sola convención.
+        if not any(x in low for x in ("/ip/", "/producto", "/product", "/p/", "/catalog", "/item")):
+            continue
+        href = href.split("#")[0]
+        if href not in seen:
+            seen.add(href); urls.append(href)
+            if len(urls) >= max_urls:
+                break
+    return urls
+
+
+def _consultar_con_reader_oficial(tienda, ingrediente_base, headers):
+    """Consulta el buscador oficial a través de Jina y después sus productos.
+
+    Este es el camino principal cuando Streamlit Cloud no puede leer bien el
+    HTML/JavaScript del supermercado. El precio solo se acepta si termina
+    viniendo de una URL del dominio oficial de la tienda.
     """
     consulta = CONSULTAS_PRECIO.get(ingrediente_base, ingrediente_base.replace("_", " "))
-    for plantilla in BUSQUEDAS_TIENDA.get(tienda, [])[:1]:
+    headers_reader = {
+        "User-Agent": headers.get("User-Agent", "Mozilla/5.0"),
+        "Accept": "text/plain,text/markdown;q=0.9,*/*;q=0.8",
+    }
+    for plantilla in BUSQUEDAS_TIENDA.get(tienda, []):
         url_oficial = plantilla.format(q=quote_plus(consulta))
-        reader_url = "https://r.jina.ai/" + url_oficial
         try:
-            rr = requests.get(
-                reader_url,
-                headers={"User-Agent": headers.get("User-Agent", "Mozilla/5.0"),
-                         "Accept": "text/plain,text/markdown;q=0.9,*/*;q=0.8"},
-                timeout=7.0,
-                allow_redirects=True,
-            )
+            rr = requests.get("https://r.jina.ai/" + url_oficial,
+                               headers=headers_reader, timeout=10.0, allow_redirects=True)
             if rr.status_code != 200 or not rr.text.strip():
                 continue
-            # El Reader devuelve contenido de la URL oficial. No aceptamos que
-            # el propio texto cambie de dominio para evitar falsos positivos.
             texto = rr.text
-            candidatos = _extraer_candidatos_lineas(texto, consulta, tienda, url_oficial)
-            compatibles = [c for c in candidatos
-                           if _candidato_compatible_base(c, {"ingrediente_base": ingrediente_base})]
+
+            # Primero intentamos extraer productos/precios directamente del
+            # contenido de resultados que Jina ya convirtió a texto.
+            candidatos = _extraer_candidatos_oficiales(texto, consulta, tienda, url_oficial)
+            if not candidatos:
+                candidatos = _extraer_candidatos_lineas(texto, consulta, tienda, url_oficial)
+
+            # Si el buscador solo devuelve enlaces, abrimos las páginas reales
+            # de producto mediante el mismo lector oficial.
+            urls = _extraer_urls_oficiales_desde_texto(texto, tienda, max_urls=8)
+            if urls:
+                with ThreadPoolExecutor(max_workers=min(6, len(urls))) as ex:
+                    futs=[ex.submit(_consultar_url_oficial_producto, u, tienda, consulta, headers) for u in urls]
+                    for fut in as_completed(futs):
+                        try:
+                            candidatos.extend(fut.result())
+                        except Exception:
+                            pass
+
+            compatibles=[c for c in candidatos if _candidato_compatible_base(c,{"ingrediente_base":ingrediente_base})]
             if compatibles:
                 return compatibles
         except Exception:
             continue
     return []
 
-
 def _buscar_candidatos_tienda(tienda, ingrediente_base):
-    """Busca productos reales con pocas consultas y varios fallbacks.
-    Solo trabaja sobre un ingrediente solicitado y cachea el resultado."""
+    """Obtiene productos/precios actuales de una tienda seleccionada.
+
+    Orden de prioridad:
+    1) HTML/JSON de la tienda;
+    2) Jina leyendo el buscador oficial + páginas oficiales de producto;
+    3) descubrimiento de URLs oficiales y lectura de esas páginas.
+
+    Nunca usa el precio del catálogo de referencia como precio verificado.
+    """
     consulta=CONSULTAS_PRECIO.get(ingrediente_base, ingrediente_base.replace("_"," "))
     clave=("candidatos",tienda,ingrediente_base)
     ahora=time.time()
     cache=PRECIO_CACHE.get(clave)
     if cache and ahora-cache["ts"]<PRECIO_CACHE_TTL:
         return cache["resultado"]
+
     headers={"User-Agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/154 Safari/537.36",
-             "Accept-Language":"es-MX,es;q=0.9,en;q=0.8","Accept":"text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8"}
+             "Accept-Language":"es-MX,es;q=0.9,en;q=0.8",
+             "Accept":"text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8"}
+    dominio=DOMINIOS_OFICIALES.get(tienda,"")
     candidatos=[]; errores=[]
-    # Usamos solo una URL primaria; la segunda se consulta únicamente si no hubo resultados.
-    plantillas=BUSQUEDAS_TIENDA.get(tienda,[])
-    for idx,plantilla in enumerate(plantillas[:2]):
+
+    # 1) Lectura directa del buscador oficial.
+    for plantilla in BUSQUEDAS_TIENDA.get(tienda,[]):
         url=plantilla.format(q=quote_plus(consulta))
         try:
-            r=requests.get(url,headers=headers,timeout=3.5,allow_redirects=True)
-            dominio=DOMINIOS_OFICIALES.get(tienda,"")
+            r=requests.get(url,headers=headers,timeout=5.0,allow_redirects=True)
             if r.status_code!=200 or dominio not in r.url:
-                errores.append(f"HTTP {r.status_code}"); continue
+                errores.append(f"directo {r.status_code}")
+                continue
             candidatos.extend(_extraer_candidatos_oficiales(r.text,consulta,tienda,r.url))
             if not candidatos:
                 candidatos.extend(_extraer_candidatos_lineas(r.text,consulta,tienda,r.url))
-            # Si aún no hay candidatos, abrimos unas pocas páginas de producto oficiales.
-            if not candidatos:
-                enlaces=_extraer_enlaces_productos(r.text,consulta,tienda,r.url)
-                def fetch(u):
-                    try:
-                        rr=requests.get(u,headers=headers,timeout=3.5,allow_redirects=True)
-                        if rr.status_code==200 and dominio in rr.url:
-                            return _extraer_candidatos_oficiales(rr.text,consulta,tienda,rr.url) or _extraer_candidatos_lineas(rr.text,consulta,tienda,rr.url)
-                    except Exception:
-                        return []
-                    return []
-                if enlaces:
-                    with ThreadPoolExecutor(max_workers=min(4,len(enlaces))) as ex:
-                        for fut in as_completed([ex.submit(fetch,u) for u in enlaces]):
-                            candidatos.extend(fut.result())
-            if candidatos: break
-            errores.append("sin productos identificables")
+            if candidatos:
+                break
         except Exception as exc:
-            errores.append(str(exc)[:80])
-    # FALLBACK 1: lector de la URL OFICIAL para tiendas cuyo contenido se
-    # renderiza con JavaScript y no llega completo a requests/BeautifulSoup.
-    # Esto mantiene la fuente en el dominio de la tienda y evita falsos "No disponible".
-    if not candidatos:
-        candidatos.extend(_consultar_con_reader_oficial(tienda, ingrediente_base, headers))
+            errores.append(f"directo: {str(exc)[:70]}")
 
-    # FALLBACK 2: si el buscador interno de la tienda sigue sin entregar datos,
-    # usamos un buscador web únicamente para descubrir páginas oficiales y luego
-    # consultamos esas páginas directamente.
+    # 2) Camino robusto para JavaScript/anti-bot: Jina lee el buscador oficial,
+    # encuentra enlaces reales y después se leen las páginas de producto.
     if not candidatos:
-        urls = _descubrir_urls_oficiales_por_busqueda_web(tienda, consulta, max_urls=5)
-        if urls:
-            with ThreadPoolExecutor(max_workers=min(5, len(urls))) as ex:
-                futuros = [ex.submit(_consultar_url_oficial_producto, u, tienda, consulta, headers) for u in urls]
-                for fut in as_completed(futuros):
-                    try:
-                        candidatos.extend(fut.result())
-                    except Exception:
-                        pass
+        try:
+            candidatos.extend(_consultar_con_reader_oficial(tienda,ingrediente_base,headers))
+        except Exception as exc:
+            errores.append(f"reader: {str(exc)[:70]}")
 
+    # 3) Último recurso: descubrir URLs oficiales mediante buscador y luego
+    # consultar esas URLs oficiales. El buscador solo descubre; jamás aporta el precio.
+    if not candidatos:
+        try:
+            urls=_descubrir_urls_oficiales_por_busqueda_web(tienda,consulta,max_urls=6)
+            if urls:
+                with ThreadPoolExecutor(max_workers=min(6,len(urls))) as ex:
+                    futs=[ex.submit(_consultar_url_oficial_producto,u,tienda,consulta,headers) for u in urls]
+                    for fut in as_completed(futs):
+                        try:
+                            candidatos.extend(fut.result())
+                        except Exception:
+                            pass
+        except Exception as exc:
+            errores.append(f"descubrimiento: {str(exc)[:70]}")
+
+    # Filtrado final: mismo ingrediente + presentación identificable + precio.
     unicos={}
     for c in candidatos:
         if not _candidato_compatible_base(c,{"ingrediente_base":ingrediente_base}):
             continue
-        key=(normalizar_texto(c.get("nombre","")),c.get("contenido"),c.get("unidad_contenido"))
-        if key not in unicos or c.get("precio",10**9)<unicos[key].get("precio",10**9):
+        try:
+            precio=float(c.get("precio"))
+            contenido=float(c.get("contenido"))
+        except Exception:
+            continue
+        if precio<=0 or contenido<=0:
+            continue
+        c["estado_precio"]="Verificado"
+        c["ultima_verificacion"]=datetime.now().astimezone().isoformat(timespec="minutes")
+        key=(normalizar_texto(c.get("nombre","")),contenido,c.get("unidad_contenido"))
+        if key not in unicos or precio< float(unicos[key].get("precio",10**9)):
             unicos[key]=c
+
     resultado={"candidatos":sorted(unicos.values(),key=lambda x:x.get("precio",10**9))[:40],
                "ultima_verificacion":datetime.now().astimezone().isoformat(timespec="minutes"),
-               "fuente":(next(iter(unicos.values())).get("fuente_precio",DOMINIOS_OFICIALES.get(tienda,"")) if unicos else DOMINIOS_OFICIALES.get(tienda,"")),
-               "error":"; ".join(errores[-2:])}
+               "fuente":(next(iter(unicos.values())).get("fuente_precio",dominio) if unicos else dominio),
+               "error":"; ".join(errores[-3:])}
     PRECIO_CACHE[clave]={"ts":ahora,"resultado":resultado}
     return resultado
-
 
 def _buscar_candidatos_lote(tareas, max_workers=12):
     """Consulta tienda+ingrediente en paralelo para evitar esperas acumuladas."""
@@ -3442,6 +3494,67 @@ RECETAS_REALES.update({
     "huevos_rancheros_verificados": {"tipo":"Desayuno","nombre":"Huevos rancheros","fuente":"Recetas Nestlé México","fuente_url":"https://www.recetasnestle.com.mx/recetas/huevos-rancheros","verificada":True,"cocina":"Mexicana","ingredientes":[("huevo",2,"pieza"),("tomate",0.15,"kg"),("cebolla",0.04,"kg"),("tortilla",0.10,"kg"),("aceite",8,"ml")],"pasos":["Prepara la salsa ranchera con jitomate, cebolla y los chiles de la receta original.","Cocina los huevos al punto deseado.","Sirve los huevos con la salsa caliente y tortillas."]},
 })
 
+# ---------------- AMPLIACIÓN DE PLATILLOS REALES ----------------
+# Son preparaciones reconocibles de cocina mexicana/casera. Se mantienen dentro
+# de los ingredientes que KashCook ya puede comprar para no crear ingredientes
+# "fantasma" que luego desaparezcan de la lista de compras.
+RECETAS_REALES.update({
+    "enchiladas_rojas_pollo": {
+        "tipo":"Comida","nombre":"Enchiladas rojas de pollo",
+        "fuente":"Receta tradicional mexicana","verificada":False,"cocina":"Mexicana",
+        "ingredientes":[("tortilla",0.15,"kg"),("pollo",0.18,"kg"),("tomate",0.16,"kg"),("cebolla",0.03,"kg"),("queso",0.04,"kg"),("aceite",8,"ml")],
+        "pasos":["Cuece y deshebra el pollo.","Prepara una salsa de jitomate con cebolla y deja que reduzca.","Calienta las tortillas, rellénalas con pollo y báñalas con la salsa roja.","Termina con queso y cebolla y sirve calientes."],
+    },
+    "tostadas_tinga_pollo": {
+        "tipo":"Comida","nombre":"Tostadas de tinga de pollo",
+        "fuente":"Receta tradicional mexicana","verificada":False,"cocina":"Mexicana",
+        "ingredientes":[("tortilla",0.15,"kg"),("pollo",0.18,"kg"),("tomate",0.14,"kg"),("cebolla",0.06,"kg"),("lechuga",0.10,"pieza"),("queso",0.04,"kg"),("aceite",8,"ml")],
+        "pasos":["Cuece y deshebra el pollo.","Cocina cebolla y jitomate hasta formar la base de la tinga.","Incorpora el pollo y deja que absorba la salsa.","Dora las tortillas hasta obtener tostadas y sirve la tinga con lechuga y queso."],
+    },
+    "tacos_carne_asada": {
+        "tipo":"Comida","nombre":"Tacos de carne asada",
+        "fuente":"Receta tradicional mexicana","verificada":False,"cocina":"Mexicana",
+        "ingredientes":[("res",0.18,"kg"),("tortilla",0.15,"kg"),("cebolla",0.04,"kg"),("tomate",0.10,"kg"),("aceite",6,"ml")],
+        "pasos":["Corta la carne en tiras o trozos pequeños y sazona.","Sella la carne a fuego alto hasta el punto deseado.","Asa la cebolla y prepara tomate picado como acompañamiento.","Sirve la carne en tortillas calientes."],
+    },
+    "tacos_pollo_mexicana": {
+        "tipo":"Comida","nombre":"Tacos de pollo a la mexicana",
+        "fuente":"Receta tradicional mexicana","verificada":False,"cocina":"Mexicana",
+        "ingredientes":[("pollo",0.18,"kg"),("tortilla",0.15,"kg"),("tomate",0.12,"kg"),("cebolla",0.04,"kg"),("aceite",8,"ml")],
+        "pasos":["Cocina y deshebra el pollo.","Sofríe cebolla y jitomate hasta formar un guiso.","Agrega el pollo y cocina unos minutos para integrar los sabores.","Sirve en tortillas calientes."],
+    },
+    "tostadas_pollo": {
+        "tipo":"Cena","nombre":"Tostadas de pollo",
+        "fuente":"Receta tradicional mexicana","verificada":False,"cocina":"Mexicana",
+        "ingredientes":[("tortilla",0.15,"kg"),("pollo",0.15,"kg"),("frijol",0.06,"kg"),("lechuga",0.10,"pieza"),("tomate",0.08,"kg"),("queso",0.04,"kg"),("aceite",8,"ml")],
+        "pasos":["Cuece y deshebra el pollo.","Dora las tortillas hasta que estén crujientes.","Unta una capa de frijoles y agrega el pollo.","Termina con lechuga, tomate y queso."],
+    },
+    "carne_asada_cebolla": {
+        "tipo":"Cena","nombre":"Carne asada con cebolla y tomate",
+        "fuente":"Receta tradicional mexicana","verificada":False,"cocina":"Mexicana",
+        "ingredientes":[("res",0.18,"kg"),("cebolla",0.06,"kg"),("tomate",0.10,"kg"),("aceite",6,"ml")],
+        "pasos":["Sazona la carne y séllala en una sartén o parrilla.","Asa la cebolla hasta que esté dorada.","Agrega tomate fresco como acompañamiento.","Sirve la carne recién hecha con la cebolla asada."],
+    },
+    "shakshuka": {
+        "tipo":"Cena","nombre":"Shakshuka de tomate y huevo",
+        "fuente":"Cocina del Mediterráneo y Medio Oriente","verificada":False,"cocina":"Mediterránea",
+        "ingredientes":[("huevo",2,"pieza"),("tomate",0.22,"kg"),("cebolla",0.05,"kg"),("aceite",8,"ml")],
+        "pasos":["Sofríe la cebolla en aceite hasta suavizarla.","Agrega el tomate y cocina hasta obtener una salsa espesa.","Haz huecos en la salsa y añade los huevos.","Tapa y cocina hasta que las claras estén cuajadas y las yemas aún jugosas."],
+    },
+    "ratatouille": {
+        "tipo":"Comida","nombre":"Ratatouille de verduras",
+        "fuente":"Cocina francesa tradicional","verificada":False,"cocina":"Mediterránea",
+        "ingredientes":[("calabaza",0.18,"kg"),("tomate",0.18,"kg"),("cebolla",0.05,"kg"),("zanahoria",0.10,"kg"),("aceite",10,"ml")],
+        "pasos":["Corta las verduras en piezas de tamaño parecido.","Sofríe la cebolla y agrega zanahoria y calabacita.","Incorpora el tomate y cocina a fuego bajo hasta que las verduras estén tiernas.","Sirve caliente como plato de verduras o guarnición."],
+    },
+    "omurice": {
+        "tipo":"Comida","nombre":"Omurice japonés de arroz y huevo con pollo",
+        "fuente":"Cocina japonesa","verificada":False,"cocina":"Asiática",
+        "ingredientes":[("arroz",0.10,"kg"),("pollo",0.14,"kg"),("huevo",2,"pieza"),("tomate",0.08,"kg"),("cebolla",0.04,"kg"),("aceite",10,"ml")],
+        "pasos":["Cocina el arroz y déjalo listo para saltear.","Dora el pollo con cebolla y agrega tomate para formar el relleno.","Incorpora el arroz y mezcla hasta integrar.","Prepara una tortilla fina de huevo, coloca el arroz en el centro y envuelve para servir."],
+    },
+})
+
 # ---------------- COCINAS INTERNACIONALES ----------------
 # Estas recetas usan únicamente ingredientes que KashCook puede convertir en
 # productos del catálogo actual. Son platos reconocibles; no son nombres
@@ -3516,11 +3629,34 @@ PLATOS = [k for k,v in RECETAS_REALES.items() if v["tipo"] in ("Comida","Cena")]
 # Cenas sencillas: preparaciones tradicionales/caseras que normalmente funcionan
 # mejor por la noche que un plato fuerte de comida. No se inventan recetas; solo
 # se prioriza una selección explícita de recetas ya existentes en la biblioteca.
+# Cenas: platos reconocibles y razonables para la noche.
+# NO se usan combinaciones de acompañamientos como "arroz + frijoles + huevo"
+# como si fueran una comida principal.
 CENAS_SENCILLAS_TRADICIONALES = {
-    "calabacitas_queso", "arroz_frijoles", "tacos_papa_queso",
-    "frijoles_arroz_huevo", "enchiladas_queso", "tacos_atun",
-    "sardinas_papa", "calabacitas_arroz", "ensalada_atun_papa",
-    "atun_bolitas", "tortilla_espanola", "frittata_calabaza_queso",
+    "calabacitas_queso", "enchiladas_queso", "tacos_atun",
+    "sardinas_papa", "ensalada_atun_papa", "atun_bolitas",
+    "tortilla_espanola", "frittata_calabaza_queso", "tinga_pollo",
+    "tortitas_papa_comida", "quesadillas_papa", "flautas_papa",
+    "chilaquiles_rojos", "migas_mexicanas", "tostadas_pollo", "carne_asada_cebolla",
+    "shakshuka",
+}
+
+# Estas preparaciones pueden existir como desayuno/cena económica, pero NO
+# deben aparecer como "Comida" principal del día. La comida debe ser un
+# platillo reconocible, no un conjunto improvisado de guarniciones.
+COMIDAS_NO_VALIDAS_COMO_PLATO_PRINCIPAL = {
+    "arroz_frijoles", "frijoles_arroz_huevo", "huevos_arroz_frijol",
+    "arroz_huevo", "frijoles_huevo", "tostadas_frijol_huevo",
+    "calabacitas_arroz", "arroz_tomate_italiano",
+}
+
+# Preparaciones demasiado simples para representar una comida poblacional.
+# Permanecen en la biblioteca para referencia histórica, pero el generador NO
+# las selecciona automáticamente.
+RECETAS_EXCLUIDAS_DEL_GENERADOR = COMIDAS_NO_VALIDAS_COMO_PLATO_PRINCIPAL | {
+    "arroz_frijoles", "frijoles_arroz_huevo", "huevos_arroz_frijol",
+    "arroz_huevo", "frijoles_huevo", "tostadas_frijol_huevo",
+    "calabacitas_arroz", "arroz_tomate_italiano",
 }
 
 def _producto_para_base(base, catalogo):
@@ -3736,10 +3872,16 @@ def _generar_plan_local(
     def compatible(rid, tipo):
         if not RECETAS_REALES[rid].get("real", False):
             return False
-        if tipo == "Desayuno":
-            if rid not in DESAYUNOS:
-                return False
-        elif rid not in PLATOS:
+        # El tipo de receta es obligatorio. Antes el motor permitía que una
+        # receta marcada como Cena entrara en Comida porque ambas estaban en
+        # PLATOS; eso explica parte de los menús incoherentes.
+        if RECETAS_REALES[rid].get("tipo") != tipo:
+            return False
+        if rid in RECETAS_EXCLUIDAS_DEL_GENERADOR:
+            return False
+        if tipo == "Desayuno" and rid not in DESAYUNOS:
+            return False
+        if tipo == "Comida" and rid in COMIDAS_NO_VALIDAS_COMO_PLATO_PRINCIPAL:
             return False
         if not _receta_coincide_estilos(rid, estilos):
             return False
@@ -3754,10 +3896,11 @@ def _generar_plan_local(
     candidatos_des = [r for r in DESAYUNOS if compatible(r, "Desayuno")]
     candidatos_pl = [r for r in PLATOS if compatible(r, "Comida")]
     candidatos_cena = [r for r in PLATOS if compatible(r, "Cena") and r in CENAS_SENCILLAS_TRADICIONALES]
-    # Si el filtro elegido deja muy pocas cenas sencillas, ampliamos solo lo
-    # necesario a recetas caseras/mexicanas ya existentes; nunca inventamos un plato.
+    # Para cenas ampliamos a otras recetas que REALMENTE están marcadas como
+    # Cena. Nunca convertimos una Comida en Cena ni una Cena en Comida.
     if len(candidatos_cena) < min(4, int(dias)):
-        candidatos_cena = [r for r in PLATOS if compatible(r, "Cena") and RECETAS_REALES[r].get("cocina") in {"Mexicana", "Casera"}]
+        candidatos_cena = [r for r in PLATOS if compatible(r, "Cena") and
+                           RECETAS_REALES[r].get("cocina") in {"Mexicana", "Casera", "Mediterránea", "Italiana"}]
 
     # Si un filtro muy específico deja una categoría sin recetas, no vamos a
     # inventar sustituciones. Primero se informa de forma clara.
@@ -3944,6 +4087,30 @@ def _generar_plan_local(
 
         plan = _plan_con_recetas(slots, catalogo, comidas)
         if not plan:
+            continue
+
+        # Validación de calidad del menú: una "Comida" no puede ser un
+        # acompañamiento disfrazado de plato principal. Esta regla se aplica
+        # después de construir el menú para que ninguna ruta de optimización
+        # pueda saltársela.
+        valido_plato_principal = True
+        for row in slots:
+            for rid, tipo in zip(row, comidas):
+                if tipo == "Comida":
+                    if rid in COMIDAS_NO_VALIDAS_COMO_PLATO_PRINCIPAL:
+                        valido_plato_principal = False
+                        break
+                    bases_cp = _receta_bases(rid)
+                    tiene_proteina = bool(bases_cp & {"pollo", "res", "molida", "puerco", "pescado", "atun", "sardina", "camaron", "huevo"})
+                    # Excepción: platos tradicionales completos sin proteína
+                    # animal, pero que son reconocibles como plato principal.
+                    platos_completos = {"tortitas_papa_comida", "arroz_tomate_italiano"}
+                    if not tiene_proteina and rid not in platos_completos:
+                        valido_plato_principal = False
+                        break
+            if not valido_plato_principal:
+                break
+        if not valido_plato_principal:
             continue
 
         nombres = [RECETAS_REALES[r]["nombre"].lower() for row in slots for r in row]
@@ -4249,11 +4416,19 @@ if generar_menu:
             compra,total=calcular_compra(plan,catalogo_optimizado,personas)
             estado_verificacion=validar_precios_verificados(compra)
 
-            # IMPORTANTE: una falla de una tienda no bloquea el producto completo.
-            # Si hay precios no verificados, el total se conserva como PROVISIONAL
-            # y cada articulo queda marcado en la lista. Solo un total 100%
-            # verificado puede mostrarse como precio real de hoy.
+            # INTEGRIDAD DE PRECIOS: KashCook es una herramienta para población
+            # real. No se permite presentar un total "provisional" como si fuera
+            # una compra confiable. Si falta aunque sea un producto, se detiene
+            # antes de guardar el plan y se informa exactamente qué ingrediente
+            # y qué fuente oficial no pudo verificarse.
             total_verificado=estado_verificacion["ok"]
+            if not total_verificado:
+                pendientes = ", ".join(estado_verificacion.get("nombres_faltantes", [])[:12])
+                raise ValueError(
+                    "KashCook no puede mostrar un total de compra hasta verificar "
+                    "TODOS los productos en la tienda seleccionada. Pendientes: " + pendientes +
+                    ". No se usaron precios de referencia ni se redujeron porciones."
+                )
             if total_verificado and total>float(presupuesto)+TOLERANCIA_PRESUPUESTO:
                 raise ValueError(
                     f"Con los precios verificados hoy, la compra completa cuesta ${total:,.2f}; "
@@ -4269,10 +4444,7 @@ if generar_menu:
             st.session_state["personas"]=personas
             st.session_state["tiendas"]=tiendas_seleccionadas
             st.session_state["precios_verificados_en"]=datetime.now().astimezone().isoformat(timespec="minutes")
-            if total_verificado:
-                st.success("Plan generado con recetas reales, porciones escaladas y productos/marcas verificados en la consulta.")
-            else:
-                st.warning("Plan generado correctamente. Algunos precios no pudieron verificarse automáticamente; el total mostrado es PROVISIONAL y cada pendiente está marcado en Compras.")
+            st.success("Plan generado con recetas reales, porciones escaladas y productos/marcas verificados en la consulta.")
         except Exception as e:
             st.error(f"Ocurrió un error al generar el plan: {e}")
 
