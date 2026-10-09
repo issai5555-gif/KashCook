@@ -40,6 +40,8 @@ st.set_page_config(
     layout="wide",
 )
 
+APP_BUILD = "2026.10.08-live-v4-reconstruida-2026.10.09"
+
 TIENDAS_DISPONIBLES = [
     "Alsuper",
     "Walmart",
@@ -1144,7 +1146,7 @@ DOMINIOS_OFICIALES = {
 
 CONSULTAS_PRECIO = {
     "pollo": "pechuga de pollo",
-    "res": "carne de res para guisar",
+    "res": "carne de res",
     "molida": "carne molida de res",
     "puerco": "carne de cerdo",
     "pescado": "filete de pescado",
@@ -1390,6 +1392,119 @@ def _producto_candidato_desde_json(obj, tienda, pagina_url, query):
         "tienda": tienda,
     }
 
+
+\
+
+def _valor_precio_json(valor):
+    """Normaliza precios embebidos en JSON de páginas de supermercado."""
+    if isinstance(valor, dict):
+        for k in ("current", "amount", "value", "sellingPrice", "salePrice", "price"):
+            if k in valor:
+                v = _valor_precio_json(valor[k])
+                if v is not None:
+                    return v
+        return None
+    if isinstance(valor, (int, float)):
+        return float(valor)
+    if isinstance(valor, str):
+        return _precio_float(valor)
+    return None
+
+
+def _extraer_candidatos_json_embebido(html_text, query, tienda, pagina_url):
+    """Lee productos/precios de estados JSON embebidos además de JSON-LD.
+
+    Muchas tiendas dibujan las tarjetas con React/Next y el HTML visible llega
+    vacío desde requests, pero el nombre/precio/presentación ya están en un
+    script JSON. Solo acepta datos contenidos en una respuesta del dominio
+    oficial de la tienda.
+    """
+    soup = BeautifulSoup(html_text, "html.parser")
+    tokens = [x for x in normalizar_texto(query).split() if len(x) >= 3]
+    found = []
+    seen = set()
+    name_keys = ("name", "productName", "product_name", "displayName", "display_name", "title", "shortDescription")
+    price_keys = ("sellingPrice", "salePrice", "currentPrice", "finalPrice", "offerPrice", "price", "lowPrice", "priceValue", "specialPrice")
+    desc_keys = ("description", "shortDescription", "productDescription", "size", "packageSize", "netContent", "weight", "volume", "presentation", "unitOfMeasure")
+    brand_keys = ("brand", "brandName", "manufacturer")
+    url_keys = ("productUrl", "canonicalUrl", "url", "pdpUrl", "productPageUrl", "slug")
+
+    def walk(obj, depth=0):
+        if depth > 30:
+            return
+        if isinstance(obj, dict):
+            # First traverse children (schemas often wrap data several levels deep).
+            name = next((obj.get(k) for k in name_keys if isinstance(obj.get(k), str) and obj.get(k).strip()), "")
+            title = str(name).strip()
+            if title:
+                desc = " ".join(str(obj.get(k)) for k in desc_keys if obj.get(k) not in (None, "", {}, []))
+                brand = next((obj.get(k) for k in brand_keys if obj.get(k) not in (None, "", {}, [])), None)
+                blob = normalizar_texto(" ".join([title, desc, str(brand or "")]))
+                if not tokens or any(t in blob for t in tokens):
+                    price = None
+                    for k in price_keys:
+                        if k in obj:
+                            price = _valor_precio_json(obj.get(k))
+                            if price is not None and price > 0:
+                                break
+                    # A veces el precio está dentro de offers/pricing/priceInfo.
+                    if price is None:
+                        for k in ("offers", "pricing", "priceInfo", "prices", "priceRange"):
+                            if k in obj:
+                                price = _valor_precio_json(obj.get(k))
+                                if price is not None and price > 0:
+                                    break
+                    if price is not None and 0 < price <= 10000:
+                        combined = " ".join([title, desc, str(obj.get("size", "")), str(obj.get("weight", "")), str(obj.get("unitOfMeasure", ""))])
+                        contenido, unidad, pres = _inferir_presentacion_producto(combined)
+                        base_query = normalizar_texto(query).split()[0] if query else ""
+                        fresh_bases = {"pollo", "res", "molida", "puerco", "pescado", "camaron", "papa", "tomate", "cebolla", "zanahoria", "lechuga", "calabaza"}
+                        per_weight = any(k in obj for k in ("pricePerUnit", "unitPrice", "pricePerKilo")) or "por kilogramo" in normalizar_texto(desc)
+                        if not contenido and per_weight and base_query in fresh_bases:
+                            contenido, unidad, pres = 1.0, "kg", "1 kg (precio por kg)"
+                        if contenido:
+                            raw_url = next((obj.get(k) for k in url_keys if isinstance(obj.get(k), str) and obj.get(k).strip()), "")
+                            if raw_url.startswith("/"):
+                                raw_url = requests.compat.urljoin(pagina_url, raw_url)
+                            if not raw_url or not DOMINIOS_OFICIALES.get(tienda, "") in raw_url:
+                                raw_url = pagina_url
+                            item = {
+                                "nombre": title[:220],
+                                "marca": _marca_desde_producto(title, brand),
+                                "precio": round(float(price), 2),
+                                "contenido": float(contenido),
+                                "unidad_contenido": unidad,
+                                "presentacion": pres or f"{contenido:g} {unidad}",
+                                "fuente_precio": raw_url,
+                                "tienda": tienda,
+                                "metodo_verificacion": "JSON de producto embebido en página oficial",
+                            }
+                            if _candidato_compatible_base(item, {"ingrediente_base": next((b for b, q in CONSULTAS_PRECIO.items() if normalizar_texto(q) == normalizar_texto(query)), base_query)}):
+                                key=(normalizar_texto(item["nombre"]), item["precio"], item["contenido"], item["unidad_contenido"])
+                                if key not in seen:
+                                    seen.add(key); found.append(item)
+            for value in obj.values():
+                if isinstance(value, (dict, list)):
+                    walk(value, depth + 1)
+        elif isinstance(obj, list):
+            for value in obj[:5000]:
+                if isinstance(value, (dict, list)):
+                    walk(value, depth + 1)
+
+    for script in soup.find_all("script"):
+        raw = script.string or script.get_text(" ", strip=True)
+        if not raw or len(raw) < 2 or len(raw) > 8_000_000:
+            continue
+        typ = str(script.get("type", "")).lower()
+        sid = str(script.get("id", "")).lower()
+        if "json" not in typ and sid not in {"__next_data__", "__nuxt_data__", "__data"} and not raw.lstrip().startswith(("{", "[")):
+            continue
+        try:
+            data = json.loads(raw)
+        except Exception:
+            continue
+        walk(data)
+    return found[:80]
 
 def _extraer_candidatos_oficiales(html_text, query, tienda, pagina_url):
     """Extrae varios productos/precios de la página oficial, no un precio aislado."""
@@ -1863,7 +1978,10 @@ def _buscar_candidatos_tienda(tienda, ingrediente_base):
     clave=("candidatos",tienda,ingrediente_base)
     ahora=time.time()
     cache=PRECIO_CACHE.get(clave)
-    if cache and ahora-cache["ts"]<PRECIO_CACHE_TTL:
+    # Solo reutilizar búsquedas que sí encontraron candidatos. Los fallos de red,
+    # páginas JS y respuestas vacías NO se cachean 15 min: era una causa directa
+    # de repetir "0 precios" aun cuando se corregía el parser o se reintentaba.
+    if cache and ahora-cache["ts"]<PRECIO_CACHE_TTL and cache.get("resultado", {}).get("candidatos"):
         return cache["resultado"]
 
     headers={"User-Agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/154 Safari/537.36",
@@ -1881,6 +1999,8 @@ def _buscar_candidatos_tienda(tienda, ingrediente_base):
                 errores.append(f"directo {r.status_code}")
                 continue
             candidatos.extend(_extraer_candidatos_oficiales(r.text,consulta,tienda,r.url))
+            if not candidatos:
+                candidatos.extend(_extraer_candidatos_json_embebido(r.text,consulta,tienda,r.url))
             if not candidatos:
                 candidatos.extend(_extraer_candidatos_lineas(r.text,consulta,tienda,r.url))
             if candidatos:
@@ -1953,7 +2073,8 @@ def _buscar_candidatos_lote(tareas, max_workers=12):
     for tienda, base in tareas:
         clave = (tienda, base)
         cache = PRECIO_CACHE.get(("candidatos", tienda, base))
-        if cache and time.time() - cache["ts"] < PRECIO_CACHE_TTL:
+        if (cache and time.time() - cache["ts"] < PRECIO_CACHE_TTL
+                and cache.get("resultado", {}).get("candidatos")):
             resultados[clave] = cache["resultado"]
         else:
             pendientes.append((tienda, base))
@@ -2139,7 +2260,14 @@ def _reemplazar_productos_por_verificados(plan, catalogo_verificado):
                 if not opciones:
                     continue
                 def costo(p):
-                    try: return float(p.get("precio") or 10**9)
+                    try:
+                        precio = float(p.get("precio") or 10**9)
+                        contenido = max(float(p.get("contenido") or 1), 1e-9)
+                        unidad = str(p.get("unidad_contenido") or "").lower()
+                        if unidad == "g": return precio / (contenido / 1000.0)
+                        if unidad == "ml": return precio / (contenido / 1000.0)
+                        if unidad in {"kg", "l"}: return precio / contenido
+                        return precio / contenido
                     except Exception: return 10**9
                 elegido=min(opciones,key=costo)
                 # Si cambia la presentación, recalcular la cantidad expresada en
@@ -3025,6 +3153,7 @@ def generar_pdf(
     presupuesto,
     personas,
     tiendas,
+    total_verificado=False,
 ):
 
     buffer = io.BytesIO()
@@ -3107,7 +3236,8 @@ def generar_pdf(
             f"Tiendas seleccionadas: "
             f"{html.escape(', '.join(tiendas))}<br/>"
             f"Presupuesto: ${presupuesto:,.2f} MXN<br/>"
-            f"Compra estimada: ${total:,.2f} MXN",
+            + (f"Total de compra verificado: ${total:,.2f} MXN" if total_verificado and total is not None
+               else "TOTAL DE COMPRA NO DISPONIBLE: faltan precios actuales verificados"),
             subtitulo,
         )
     )
@@ -3355,12 +3485,12 @@ def generar_pdf(
                 ),
 
                 Paragraph(
-                    f"${item['precio_unitario']:,.2f}",
+                    f"${item['precio_unitario']:,.2f}" if item.get("estado_precio") == "Verificado" else "Sin verificar",
                     pequeno,
                 ),
 
                 Paragraph(
-                    f"${item['subtotal']:,.2f}",
+                    f"${item['subtotal']:,.2f}" if item.get("estado_precio") == "Verificado" else "No calculable",
                     pequeno,
                 ),
 
@@ -3460,18 +3590,15 @@ def generar_pdf(
         )
     )
 
-    story.append(
-        Paragraph(
-            f"<b>TOTAL DE COMPRA: "
-            f"${total:,.2f} MXN</b>",
-            ParagraphStyle(
-                "TotalKash",
-                parent=normal,
-                fontSize=14,
-                leading=18,
-            ),
-        )
+    mensaje_total = (
+        f"<b>TOTAL DE COMPRA VERIFICADO: ${total:,.2f} MXN</b>"
+        if total_verificado and total is not None
+        else "<b>TOTAL DE COMPRA NO DISPONIBLE</b><br/>Hay productos cuyo precio actual no se pudo verificar en la tienda seleccionada. No se calculó ni se presenta un total estimado como si fuera real."
     )
+    story.append(Paragraph(
+        mensaje_total,
+        ParagraphStyle("TotalKash", parent=normal, fontSize=12, leading=16),
+    ))
 
     story.append(
         Paragraph(
@@ -3481,7 +3608,7 @@ def generar_pdf(
         )
     )
 
-    if total <= presupuesto:
+    if total_verificado and total is not None and total <= presupuesto:
 
         story.append(
             Paragraph(
@@ -3491,7 +3618,7 @@ def generar_pdf(
             )
         )
 
-    else:
+    elif total_verificado and total is not None:
 
         story.append(
             Paragraph(
@@ -4459,9 +4586,10 @@ html,body,[class*="css"] { font-family:'DM Sans',sans-serif; }
 </style>
 """, unsafe_allow_html=True)
 
-st.markdown("<div class='hero'><div><div class='badge'>KASHCOOK AI · MENÚ + COMPRAS + PRESUPUESTO</div><h1>Come mejor.<br>Compra inteligente.</h1><p>Un plan de comida hecho a tu medida, convertido en una lista de compra real y con precios de referencia para planificar tu semana.</p></div></div>", unsafe_allow_html=True)
+st.markdown(f"<div class='hero'><div><div class='badge'>KASHCOOK AI · MENÚ + COMPRAS + PRESUPUESTO · {APP_BUILD}</div><h1>Come mejor.<br>Compra inteligente.</h1><p>Un plan de comida a tu medida, con cantidades consolidadas, lista de compra por tienda y precios actuales solo cuando pueden verificarse.</p></div></div>", unsafe_allow_html=True)
 
 st.markdown("<div class='section-title'>1 · Diseña tu semana</div>", unsafe_allow_html=True)
+st.caption(f"Motor {APP_BUILD} · Precios confirmados únicamente con fuente oficial; si falta algún dato, no se calcula total.")
 
 # Tiendas: mismos datos y mismas 4 tiendas, ahora con los logos visuales restaurados.
 STORE_META_UI = {
@@ -4562,35 +4690,41 @@ if generar_menu:
             compra,total=calcular_compra(plan,catalogo_optimizado,personas)
             estado_verificacion=validar_precios_verificados(compra)
 
-            # INTEGRIDAD DE PRECIOS: KashCook es una herramienta para población
-            # real. No se permite presentar un total "provisional" como si fuera
-            # una compra confiable. Si falta aunque sea un producto, se detiene
-            # antes de guardar el plan y se informa exactamente qué ingrediente
-            # y qué fuente oficial no pudo verificarse.
-            total_verificado=estado_verificacion["ok"]
-            if not total_verificado:
-                pendientes = ", ".join(estado_verificacion.get("nombres_faltantes", [])[:12])
-                raise ValueError(
-                    "KashCook no puede mostrar un total de compra hasta verificar "
-                    "TODOS los productos en la tienda seleccionada. Pendientes: " + pendientes +
-                    ". No se usaron precios de referencia ni se redujeron porciones."
+            # Integridad comercial: se puede entregar menú + lista, pero jamás
+            # mostrar un total si queda al menos un producto sin precio actual verificado.
+            total_verificado = bool(estado_verificacion["ok"])
+            if total_verificado and total > float(presupuesto) + TOLERANCIA_PRESUPUESTO:
+                # Se conserva el menú para revisión; no se falsean porciones ni precios.
+                st.warning(
+                    f"Los precios verificados suman ${total:,.2f}, por encima del presupuesto "
+                    f"de ${float(presupuesto):,.2f}. KashCook conserva las porciones reales."
                 )
-            if total_verificado and total>float(presupuesto)+TOLERANCIA_PRESUPUESTO:
-                raise ValueError(
-                    f"Con los precios verificados hoy, la compra completa cuesta ${total:,.2f}; "
-                    f"el presupuesto es ${float(presupuesto):,.2f}. KashCook no reducirá porciones ni sustituirá precios reales para aparentar que alcanza.")
 
-            st.session_state["plan"]=plan
-            st.session_state["compra"]=compra
-            st.session_state["total"]=total
-            st.session_state["catalogo_verificado"]=catalogo_optimizado
-            st.session_state["estado_verificacion"]=estado_verificacion
-            st.session_state["total_es_real"]=total_verificado
-            st.session_state["presupuesto"]=presupuesto
-            st.session_state["personas"]=personas
-            st.session_state["tiendas"]=tiendas_seleccionadas
-            st.session_state["precios_verificados_en"]=datetime.now().astimezone().isoformat(timespec="minutes")
-            st.success("Plan generado con recetas reales, porciones escaladas y productos/marcas verificados en la consulta.")
+            errores_verificacion = {}
+            for tienda in tiendas_seleccionadas:
+                errores_verificacion[tienda] = {}
+                for base in bases_necesarias:
+                    rr = PRECIO_CACHE.get(("candidatos", tienda, base), {}).get("resultado", {})
+                    if not rr.get("candidatos"):
+                        errores_verificacion[tienda][base] = rr.get("error") or "La tienda no devolvió producto/precio legible."
+
+            st.session_state["plan"] = plan
+            st.session_state["compra"] = compra
+            st.session_state["total"] = total if total_verificado else None
+            st.session_state["total_calculado_no_mostrar"] = total if not total_verificado else None
+            st.session_state["catalogo_verificado"] = catalogo_optimizado
+            st.session_state["estado_verificacion"] = estado_verificacion
+            st.session_state["errores_verificacion"] = errores_verificacion
+            st.session_state["total_es_real"] = total_verificado
+            st.session_state["presupuesto"] = presupuesto
+            st.session_state["personas"] = personas
+            st.session_state["tiendas"] = tiendas_seleccionadas
+            st.session_state["precios_verificados_en"] = datetime.now().astimezone().isoformat(timespec="minutes")
+            if total_verificado:
+                st.success("Plan generado. Todos los precios se verificaron en las tiendas consultadas.")
+            else:
+                n = estado_verificacion.get("faltantes", 0)
+                st.warning(f"Menú y lista generados. {n} producto(s) siguen sin precio actual verificable; el total queda oculto. No se muestran precios de referencia como reales.")
         except Exception as e:
             st.error(f"Ocurrió un error al generar el plan: {e}")
 
@@ -4608,11 +4742,16 @@ if "plan" in st.session_state:
     st.markdown("<div class='section-title'>3 · Tu dashboard</div>", unsafe_allow_html=True)
     c1,c2,c3,c4=st.columns(4)
     with c1: st.markdown(f"<div class='metric-card'><div class='metric-label'>Presupuesto</div><div class='metric-value'>${presupuesto:,.2f}</div></div>",unsafe_allow_html=True)
-    with c2: st.markdown(f"<div class='metric-card'><div class='metric-label'>Compra calculada</div><div class='metric-value'>${total:,.2f}</div></div>",unsafe_allow_html=True)
-    with c3: st.markdown(f"<div class='metric-card'><div class='metric-label'>Disponible</div><div class='metric-value'>${max(0,presupuesto-total):,.2f}</div></div>",unsafe_allow_html=True)
+    with c2:
+        valor_total = f"${total:,.2f}" if total is not None and total_es_real else "Sin verificar"
+        st.markdown(f"<div class='metric-card'><div class='metric-label'>Compra verificada</div><div class='metric-value'>{valor_total}</div></div>",unsafe_allow_html=True)
+    with c3:
+        disponible = f"${max(0,presupuesto-total):,.2f}" if total is not None and total_es_real else "—"
+        st.markdown(f"<div class='metric-card'><div class='metric-label'>Disponible</div><div class='metric-value'>{disponible}</div></div>",unsafe_allow_html=True)
     with c4:
-        util=(total/presupuesto*100) if presupuesto else 0
-        st.markdown(f"<div class='metric-card'><div class='metric-label'>Uso del presupuesto</div><div class='metric-value'>{util:.0f}%</div></div>",unsafe_allow_html=True)
+        util=(total/presupuesto*100) if presupuesto and total is not None and total_es_real else None
+        valor_uso=f"{util:.0f}%" if util is not None else "—"
+        st.markdown(f"<div class='metric-card'><div class='metric-label'>Uso del presupuesto</div><div class='metric-value'>{valor_uso}</div></div>",unsafe_allow_html=True)
 
     verif_hora=st.session_state.get("precios_verificados_en", "consulta actual")
     estado_verif=st.session_state.get("estado_verificacion", {}) or {}
@@ -4620,11 +4759,48 @@ if "plan" in st.session_state:
     nver=estado_verif.get("verificados", 0)
     nfalta=estado_verif.get("faltantes", 0)
     if total_es_real:
-        st.markdown(f"<div class='card'><b>🟢 Precio real verificado:</b> todos los productos de esta compra fueron verificados en la consulta de {verif_hora}.</div>", unsafe_allow_html=True)
+        st.markdown(f"<div class='card'><b>🟢 Precio actual verificado:</b> todos los productos de esta compra fueron verificados en la consulta de {verif_hora}.</div>", unsafe_allow_html=True)
     else:
-        faltas=", ".join(estado_verif.get("nombres_faltantes", [])[:6])
-        if len(estado_verif.get("nombres_faltantes", []))>6: faltas += "..."
-        st.markdown(f"<div class='card'><b>🟠 Total provisional:</b> {nver} productos verificados y {nfalta} sin verificación automática. El menú y la compra sí están disponibles; los productos sin verificación aparecen marcados. <b>No se presenta este total como precio real de hoy.</b>{('<br><span class=\"small-note\">Pendientes: '+faltas+'</span>') if faltas else ''}</div>", unsafe_allow_html=True)
+        faltas=", ".join(estado_verif.get("nombres_faltantes", [])[:8])
+        if len(estado_verif.get("nombres_faltantes", []))>8: faltas += "..."
+        st.markdown(f"<div class='card'><b>🟠 Total no disponible:</b> {nver} productos verificados y {nfalta} sin verificación automática. El menú y la lista están disponibles, pero KashCook no presenta una suma de referencia como precio real.<br><span class=\"small-note\">Pendientes: {html.escape(faltas)}</span></div>", unsafe_allow_html=True)
+        with st.expander("Diagnóstico técnico de precios", expanded=False):
+            errores = st.session_state.get("errores_verificacion", {})
+            if not errores:
+                st.write("No se recibieron detalles de error en esta ejecución.")
+            for tienda_diag, por_base in errores.items():
+                st.markdown(f"**{tienda_diag}**")
+                for base_diag, err_diag in por_base.items():
+                    st.write(f"- {CONSULTAS_PRECIO.get(base_diag, base_diag)}: {err_diag}")
+        if st.button("🔄 Reintentar verificación de precios", use_container_width=True):
+            with st.spinner("Volviendo a consultar las tiendas seleccionadas..."):
+                tiendas_reintento = st.session_state.get("tiendas", [])
+                catalogo_base_reintento = []
+                for tienda_reintento in tiendas_reintento:
+                    catalogo_base_reintento.extend(copy.deepcopy(CATALOGOS.get(tienda_reintento, [])))
+                plan_reintento = st.session_state.get("plan", {})
+                catalogo_anterior = st.session_state.get("catalogo_verificado", [])
+                bases_reintento = set()
+                ids_reintento = {ing.get("producto_id") for d in plan_reintento.get("dias", []) for c in d.get("comidas", []) for ing in c.get("ingredientes", [])}
+                for prod in catalogo_anterior:
+                    if any(pid == prod.get("id") or (isinstance(pid, str) and pid.startswith(str(prod.get("id")) + "__live__")) for pid in ids_reintento):
+                        bases_reintento.add(prod.get("ingrediente_base"))
+                for key_cache in list(PRECIO_CACHE):
+                    if isinstance(key_cache, tuple) and len(key_cache) >= 3 and key_cache[0] == "candidatos" and key_cache[1] in tiendas_reintento:
+                        PRECIO_CACHE.pop(key_cache, None)
+                catalogo_nuevo = construir_catalogo_productos_optimo(catalogo_base_reintento, bases_necesarias=sorted(bases_reintento), presupuesto=float(st.session_state.get("presupuesto", 0)))
+                plan_nuevo = _reemplazar_productos_por_verificados(plan_reintento, catalogo_nuevo)
+                compra_nueva, total_nuevo = calcular_compra(plan_nuevo, catalogo_nuevo, int(st.session_state.get("personas", 1)))
+                estado_nuevo = validar_precios_verificados(compra_nueva)
+                st.session_state["plan"] = plan_nuevo
+                st.session_state["compra"] = compra_nueva
+                st.session_state["catalogo_verificado"] = catalogo_nuevo
+                st.session_state["estado_verificacion"] = estado_nuevo
+                st.session_state["total_es_real"] = bool(estado_nuevo["ok"])
+                st.session_state["total"] = total_nuevo if estado_nuevo["ok"] else None
+                st.session_state["total_calculado_no_mostrar"] = total_nuevo if not estado_nuevo["ok"] else None
+                st.session_state["precios_verificados_en"] = datetime.now().astimezone().isoformat(timespec="minutes")
+                st.rerun()
 
     tabs=st.tabs(["🍽️ Menú","🛒 Compras","💰 Presupuesto","👨‍🍳 Recetas","📄 PDF"])
     catalogo_global = st.session_state.get("catalogo_verificado", []) or []
@@ -4648,20 +4824,33 @@ if "plan" in st.session_state:
         st.info("La lista de compras se calcula sumando los ingredientes de TODOS los días y convirtiéndolos a presentaciones comerciales. Si un ingrediente aparece en una receta, debe aparecer aquí o el menú se considera inválido.")
         for x in compra:
             estado=x.get("estado_precio","Referencia")
-            marca_estado="🟢 Precio verificado" if estado=="Verificado" else "🟠 Precio de referencia · verificar en tienda"
-            # El nombre viene de la ficha real; la marca se muestra además por separado
-            # para que el usuario sepa exactamente qué buscar en el supermercado.
+            marca_estado="🟢 Precio verificado" if estado=="Verificado" else "🟠 Precio actual pendiente"
             p_catalogo=productos_por_id.get(x.get("producto_id"), {})
             marca_producto=p_catalogo.get("marca") or x.get("marca") or "Marca no identificada"
-            st.markdown(f"<div class='card'><h3>{x['producto']}</h3><div class='muted'><b>Marca:</b> {marca_producto} · {x['presentacion']} · {((f"{x['paquetes']:.2f} kg requeridos" if x.get('estado_precio')=="Verificado" and x.get('unidad')=="g" and x.get('paquetes',0)<10 else f"{x['paquetes']} paquete(s)"))} · {x['tienda']}</div><p><b>${x['precio_unitario']:,.2f} c/u</b> · subtotal <b>${x['subtotal']:,.2f}</b></p><div class='small-note'>{marca_estado} · {x.get('ultima_verificacion','')}</div></div>",unsafe_allow_html=True)
+            if estado == "Verificado":
+                linea_precio = f"<p><b>${x['precio_unitario']:,.2f} por presentación</b> · subtotal <b>${x['subtotal']:,.2f}</b></p>"
+                linea_fuente = f"<div class='small-note'>Fuente: <a href='{html.escape(str(x.get('fuente_precio') or ''), quote=True)}' target='_blank' rel='noopener'>página de producto oficial ↗</a> · {html.escape(str(x.get('ultima_verificacion') or ''))}</div>"
+            else:
+                q_url = BUSQUEDAS_TIENDA.get(x['tienda'], ["https://www.google.com/search?q={q}"])[0].format(q=quote_plus(x['producto']))
+                linea_precio = "<p><b>Precio no mostrado:</b> falta verificación automática en esta tienda.</p>"
+                linea_fuente = f"<div class='small-note'><a href='{html.escape(q_url, quote=True)}' target='_blank' rel='noopener'>Buscar en la tienda oficial ↗</a> · No se usó precio de referencia como real.</div>"
+            cantidad_txt = f"{x['paquetes']:.2f} kg requeridos" if estado == "Verificado" and x.get('unidad') == "g" and x.get('paquetes',0)<10 else f"{x['paquetes']} paquete(s)"
+            st.markdown(f"<div class='card'><h3>{html.escape(str(x['producto']))}</h3><div class='muted'><b>Marca:</b> {html.escape(str(marca_producto))} · {html.escape(str(x['presentacion']))} · {cantidad_txt} · {html.escape(str(x['tienda']))}</div>{linea_precio}<div class='small-note'>{marca_estado}</div>{linea_fuente}</div>",unsafe_allow_html=True)
+
 
     with tabs[2]:
-        restante=presupuesto-total
-        if restante>=0:
-            st.success(f"La compra está dentro del presupuesto. Quedan ${restante:,.2f}.")
+        if total is None or not total_es_real:
+            st.warning("El presupuesto no se puede comparar todavía: falta verificar uno o más precios actuales. No se usa el catálogo de referencia para calcular un total.")
+            st.write(f"Presupuesto disponible: **${presupuesto:,.2f} MXN**")
+            st.write(f"Productos con precio verificado: **{nver}** de **{len(compra)}**")
+            st.progress((nver / len(compra)) if compra else 0)
         else:
-            st.error(f"La compra supera el presupuesto por ${abs(restante):,.2f}.")
-        st.progress(min(max(total/presupuesto,0),1.0) if presupuesto else 0)
+            restante=presupuesto-total
+            if restante>=0:
+                st.success(f"La compra verificada está dentro del presupuesto. Quedan ${restante:,.2f}.")
+            else:
+                st.error(f"La compra verificada supera el presupuesto por ${abs(restante):,.2f}.")
+            st.progress(min(max(total/presupuesto,0),1.0) if presupuesto else 0)
 
     with tabs[3]:
         for dia in plan.get("dias",[]):
@@ -4682,6 +4871,6 @@ if "plan" in st.session_state:
                 for n,paso in enumerate(comida.get("preparacion",[]) or [],1): st.write(f"{n}. {paso}")
 
     with tabs[4]:
-        pdf_bytes=generar_pdf(plan=plan,compra=compra,total=total,presupuesto=presupuesto,personas=personas,tiendas=tiendas)
+        pdf_bytes=generar_pdf(plan=plan,compra=compra,total=total,presupuesto=presupuesto,personas=personas,tiendas=tiendas,total_verificado=total_es_real)
         st.download_button("📄 Descargar plan completo en PDF",data=pdf_bytes,file_name="KashCook_AI_Plan.pdf",mime="application/pdf",use_container_width=True)
 
