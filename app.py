@@ -40,7 +40,7 @@ st.set_page_config(
     layout="wide",
 )
 
-APP_BUILD = "2026.10.12-alsuper-ssl-v8"
+APP_BUILD = "2026.10.12-catalogo-tiendas-v9"
 
 TIENDAS_DISPONIBLES = [
     "Alsuper",
@@ -1139,39 +1139,37 @@ PRECIO_CACHE = {}
 PRECIO_CACHE_TTL = 15 * 60
 
 BUSQUEDAS_TIENDA = {
-    # Página oficial de ofertas de S-Mart; no equivale a un buscador de catálogo.
-    # Solo se aceptará un producto si la página expone nombre, precio y presentación.
+    # S-Mart publica principalmente ofertas y folletos en su web pública;
+    # no se fingirá que existe un catálogo completo si la página no expone precio.
     "Smart": [
-        "https://www.supermercadossmart.com/ofertas",
+        "https://www.supermercadossmart.com/ofertas/",
+        "https://www.supermercadossmart.com/",
     ],
     "Walmart": [
         "https://www.walmart.com.mx/search?q={q}",
         "https://www.walmart.com.mx/search?query={q}",
+        "https://www.walmart.com.mx/",
     ],
     "Bodega Aurrerá": [
-        # Bodega opera distintas experiencias web (catálogo principal, kiosco
-        # y despensa/entrega rápida). Se prueban solo dominios oficiales.
         "https://www.bodegaaurrera.com.mx/search?q={q}",
         "https://www.bodegaaurrera.com.mx/search?query={q}",
-        "https://kiosco.www.bodegaaurrera.com.mx/search?q={q}",
-        "https://kiosco.www.bodegaaurrera.com.mx/search?query={q}",
         "https://despensa.bodegaaurrera.com.mx/search?q={q}",
-        "https://despensa.bodegaaurrera.com.mx/search?query={q}",
+        "https://kiosco.www.bodegaaurrera.com.mx/search?q={q}",
     ],
     "Soriana": [
+        # Ruta de resultados observada en el catálogo oficial de Soriana.
+        "https://www.soriana.com/despensa/?cid=despensa&cref=0&q={q}",
         "https://www.soriana.com/buscar?q={q}",
         "https://www.soriana.com/buscar?q={q}&search-button=",
     ],
     "Alsuper": [
-        # Dominio canónico que publica la propia cadena: https://alsuper.com/
-        # No se desactiva la validación TLS ni se consultan dominios con
-        # certificados/hostnames incompatibles.
+        # Dominio canónico confirmado: https://alsuper.com/ . Se prueban
+        # variantes de consulta y la página principal, siempre con TLS activo.
+        "https://alsuper.com/buscar?q={q}",
         "https://alsuper.com/buscar?query={q}",
+        "https://alsuper.com/search?q={q}",
         "https://alsuper.com/search?query={q}",
         "https://alsuper.com/busqueda?query={q}",
-        "https://alsuper.com/search?q={q}",
-        "https://www.alsuper.com/buscar?query={q}",
-        "https://www.alsuper.com/search?q={q}",
         "https://alsuper.com/",
     ],
 }
@@ -1592,6 +1590,45 @@ def _extraer_candidatos_oficiales(html_text, query, tienda, pagina_url):
             elif isinstance(obj, list):
                 stack.extend(obj)
 
+    # Segundo intento: algunos supermercados incluyen datos de producto en
+    # scripts JSON no-LD (estado de React/Next/Shopify). Solo aceptamos objetos
+    # que contengan nombre coincidente, precio positivo y presentación legible.
+    for tag in soup.find_all("script"):
+        raw = tag.string or tag.get_text(" ", strip=True)
+        if not raw or len(raw) > 2_000_000 or not any(k in raw.lower() for k in ("price", "precio", "product")):
+            continue
+        try:
+            data = json.loads(raw)
+        except Exception:
+            continue
+        stack = data if isinstance(data, list) else [data]
+        while stack:
+            obj = stack.pop()
+            if isinstance(obj, dict):
+                name = str(obj.get("name") or obj.get("title") or obj.get("productName") or obj.get("nombre") or "")
+                normalized_name = normalizar_texto(name)
+                query_tokens = [t for t in normalizar_texto(query).split() if len(t) >= 3]
+                if name and (not query_tokens or sum(t in normalized_name for t in query_tokens) >= min(1, len(query_tokens))):
+                    price_value = obj.get("price", obj.get("precio", obj.get("salePrice", obj.get("finalPrice"))))
+                    if isinstance(price_value, dict):
+                        price_value = price_value.get("value", price_value.get("amount"))
+                    price = _precio_float(price_value)
+                    description = str(obj.get("description") or obj.get("size") or obj.get("presentation") or obj.get("presentacion") or "")
+                    content, unit, presentation = _inferir_presentacion_producto(name + " " + description)
+                    if price and 1 <= price <= 10000 and content:
+                        cand = {"nombre": name[:180], "marca": _marca_desde_producto(name), "precio": round(price, 2),
+                                "contenido": float(content), "unidad_contenido": unit,
+                                "presentacion": presentation or f"{content:g} {unit}",
+                                "fuente_precio": pagina_url, "tienda": tienda}
+                        key = (normalizar_texto(cand["nombre"]), cand["precio"], cand["contenido"], cand["unidad_contenido"])
+                        if key not in vistos:
+                            vistos.add(key); candidatos.append(cand)
+                for value in obj.values():
+                    if isinstance(value, (dict, list)):
+                        stack.append(value)
+            elif isinstance(obj, list):
+                stack.extend(obj)
+
     # Fallback: tarjetas HTML con nombre + precio. Es menos preciso, por eso
     # solo acepta una tarjeta cuando contiene simultáneamente el nombre y precio.
     for node in soup.find_all(["article", "li", "div"]):
@@ -1850,7 +1887,7 @@ def _consultar_url_oficial_producto(url, tienda, consulta, headers):
     try:
         rr=requests.get("https://r.jina.ai/"+url,
                         headers={"User-Agent":headers.get("User-Agent","Mozilla/5.0"),"Accept":"text/plain,text/markdown;q=0.9,*/*;q=0.8"},
-                        timeout=7.0,allow_redirects=True)
+                        timeout=6.0,allow_redirects=True)
         if rr.status_code==200 and rr.text.strip():
             out=extraer(rr.text,url)
             if out:
@@ -1907,7 +1944,7 @@ def _consultar_con_reader_oficial(tienda, ingrediente_base, headers):
         url_oficial = plantilla.format(q=quote_plus(consulta))
         try:
             rr = requests.get("https://r.jina.ai/" + url_oficial,
-                               headers=headers_reader, timeout=10.0, allow_redirects=True)
+                               headers=headers_reader, timeout=6.0, allow_redirects=True)
             if rr.status_code != 200 or not rr.text.strip():
                 continue
             texto = rr.text
@@ -2082,7 +2119,7 @@ def _buscar_candidatos_tienda(tienda, ingrediente_base):
     for plantilla in BUSQUEDAS_TIENDA.get(tienda,[]):
         url=plantilla.format(q=quote_plus(consulta))
         try:
-            r=requests.get(url,headers=headers,timeout=5.0,allow_redirects=True)
+            r=requests.get(url,headers=headers,timeout=4.0,allow_redirects=True)
             if r.status_code!=200 or not _url_es_tienda_oficial(tienda, r.url):
                 errores.append(f"directo {r.status_code}")
                 continue
