@@ -2019,6 +2019,38 @@ def _buscar_candidatos_desde_busqueda_web(tienda, ingrediente_base, headers, max
         if out: return out
     return out
 
+def _detalle_error_red(exc, limite=260):
+    """Expone la causa interna de errores HTTPS, sin cortar antes del motivo real."""
+    partes = [type(exc).__name__]
+    actual = exc
+    vistos = set()
+    for _ in range(5):
+        if actual is None or id(actual) in vistos:
+            break
+        vistos.add(id(actual))
+        razon = getattr(actual, "reason", None)
+        if razon is not None and razon is not actual:
+            partes.append(f"causa={type(razon).__name__}: {razon}")
+            actual = razon
+            continue
+        causa = getattr(actual, "__cause__", None) or getattr(actual, "__context__", None)
+        if causa is not None and causa is not actual:
+            partes.append(f"causa={type(causa).__name__}: {causa}")
+            actual = causa
+            continue
+        args = getattr(actual, "args", ())
+        siguiente = next((x for x in args if isinstance(x, BaseException) and x is not actual), None)
+        if siguiente is not None:
+            partes.append(f"causa={type(siguiente).__name__}: {siguiente}")
+            actual = siguiente
+            continue
+        break
+    if len(partes) == 1:
+        partes.append(str(exc))
+    detalle = " | ".join(partes)
+    return detalle[:limite] + ("…" if len(detalle) > limite else "")
+
+
 def _buscar_candidatos_tienda(tienda, ingrediente_base):
     """Obtiene productos/precios actuales de una tienda seleccionada.
 
@@ -2061,7 +2093,7 @@ def _buscar_candidatos_tienda(tienda, ingrediente_base):
             if candidatos:
                 break
         except Exception as exc:
-            errores.append(f"directo: {str(exc)[:70]}")
+            errores.append(f"directo: {_detalle_error_red(exc)}")
 
     # 2) Camino robusto para JavaScript/anti-bot: Jina lee el buscador oficial,
     # encuentra enlaces reales y después se leen las páginas de producto.
@@ -2069,7 +2101,7 @@ def _buscar_candidatos_tienda(tienda, ingrediente_base):
         try:
             candidatos.extend(_consultar_con_reader_oficial(tienda,ingrediente_base,headers))
         except Exception as exc:
-            errores.append(f"reader: {str(exc)[:70]}")
+            errores.append(f"reader: {_detalle_error_red(exc)}")
 
     # 3) Último recurso: descubrir URLs oficiales mediante buscador y luego
     # consultar esas URLs oficiales. El buscador solo descubre; jamás aporta el precio.
@@ -2085,7 +2117,7 @@ def _buscar_candidatos_tienda(tienda, ingrediente_base):
                         except Exception:
                             pass
         except Exception as exc:
-            errores.append(f"descubrimiento: {str(exc)[:70]}")
+            errores.append(f"descubrimiento: {_detalle_error_red(exc)}")
 
     # 4) Puente de contingencia: resultados de buscador que apuntan SOLO a la
     # tienda oficial. Esto evita que un bloqueo de JavaScript deje a KashCook
@@ -2094,7 +2126,7 @@ def _buscar_candidatos_tienda(tienda, ingrediente_base):
         try:
             candidatos.extend(_buscar_candidatos_desde_busqueda_web(tienda, ingrediente_base, headers))
         except Exception as exc:
-            errores.append(f"busqueda web: {str(exc)[:70]}")
+            errores.append(f"busqueda web: {_detalle_error_red(exc)}")
 
     # Filtrado final: mismo ingrediente + presentación identificable + precio.
     unicos={}
@@ -2148,7 +2180,7 @@ def _buscar_candidatos_lote(tareas, max_workers=12):
                         "candidatos": [],
                         "ultima_verificacion": datetime.now().astimezone().isoformat(timespec="minutes"),
                         "fuente": DOMINIOS_OFICIALES.get(tienda, ""),
-                        "error": str(exc)[:120],
+                        "error": _detalle_error_red(exc, limite=320),
                     }
     return resultados
 
