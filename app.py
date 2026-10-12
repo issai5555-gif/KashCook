@@ -40,7 +40,7 @@ st.set_page_config(
     layout="wide",
 )
 
-APP_BUILD = "2026.10.12-menus-caseros-v6"
+APP_BUILD = "2026.10.12-menus-caseros-precios-v7"
 
 TIENDAS_DISPONIBLES = [
     "Alsuper",
@@ -1163,6 +1163,13 @@ BUSQUEDAS_TIENDA = {
         "https://www.soriana.com/buscar?q={q}&search-button=",
     ],
     "Alsuper": [
+        # La tienda pública actual publica fichas en alsuper.mx/producto/.
+        # Se prueban rutas de búsqueda en el dominio actual y el legado.
+        "https://www.alsuper.mx/buscar?query={q}",
+        "https://www.alsuper.mx/search?query={q}",
+        "https://www.alsuper.mx/busqueda?query={q}",
+        "https://www.alsuper.mx/search?q={q}",
+        "https://alsuper.mx/buscar?query={q}",
         "https://alsuper.com/buscar?query={q}",
         "https://alsuper.com/search?search={q}",
         "https://alsuper.com/busqueda?query={q}",
@@ -1176,8 +1183,20 @@ DOMINIOS_OFICIALES = {
     "Walmart": "walmart.com.mx",
     "Bodega Aurrerá": "bodegaaurrera.com.mx",
     "Soriana": "soriana.com",
-    "Alsuper": "alsuper.com",
+    "Alsuper": "alsuper.mx",
 }
+
+DOMINIOS_ALTERNATIVOS = {
+    # Alsuper migró sus fichas públicas al dominio .mx; el dominio .com
+    # se conserva como alias legado para enlaces que todavía redirigen.
+    "Alsuper": ("alsuper.mx", "alsuper.com"),
+}
+
+def _url_es_tienda_oficial(tienda, url):
+    """Comprueba el host oficial actual y alias documentados de la tienda."""
+    host = str(url or "").lower()
+    dominios = DOMINIOS_ALTERNATIVOS.get(tienda, (DOMINIOS_OFICIALES.get(tienda, ""),))
+    return any(d and d in host for d in dominios)
 
 CONSULTAS_PRECIO = {
     "pollo": "pechuga de pollo",
@@ -1302,7 +1321,7 @@ def _consultar_precio_tienda(tienda, ingrediente_base):
         try:
             r = requests.get(url, headers=headers, timeout=9, allow_redirects=True)
             dominio = DOMINIOS_OFICIALES[tienda]
-            if r.status_code != 200 or dominio not in r.url or dominio not in str(r.headers.get("Content-Type", "")) and not r.text:
+            if r.status_code != 200 or not _url_es_tienda_oficial(tienda, r.url) or (dominio not in str(r.headers.get("Content-Type", "")) and not r.text):
                 errores.append(f"HTTP {r.status_code}")
                 continue
             precio = _extraer_precio_oficial(r.text, consulta)
@@ -1502,7 +1521,7 @@ def _extraer_candidatos_json_embebido(html_text, query, tienda, pagina_url):
                             raw_url = next((obj.get(k) for k in url_keys if isinstance(obj.get(k), str) and obj.get(k).strip()), "")
                             if raw_url.startswith("/"):
                                 raw_url = requests.compat.urljoin(pagina_url, raw_url)
-                            if not raw_url or not DOMINIOS_OFICIALES.get(tienda, "") in raw_url:
+                            if not raw_url or not _url_es_tienda_oficial(tienda, raw_url):
                                 raw_url = pagina_url
                             item = {
                                 "nombre": title[:220],
@@ -1691,7 +1710,7 @@ def _extraer_enlaces_productos(html_text, query, tienda, pagina_url):
         if not href: continue
         if href.startswith("/"):
             href=requests.compat.urljoin(pagina_url,href)
-        if dominio not in href: continue
+        if not _url_es_tienda_oficial(tienda, href): continue
         if not any(x in href.lower() for x in ("/producto/","/ip/","/product","/p/")):
             continue
         if href in seen: continue
@@ -1721,10 +1740,10 @@ def _descubrir_urls_oficiales_por_busqueda_web(tienda, consulta, max_urls=5):
 
     def agregar(texto):
         # Markdown de Jina: [titulo](https://dominio/...)
-        encontrados = re.findall(r'https?://[^\\s)<>\"]+', texto or "")
+        encontrados = re.findall(r'https?://[^\s)<>\"]+', texto or "")
         for href in encontrados:
             href = href.rstrip('.,;]')
-            if dominio not in href:
+            if not _url_es_tienda_oficial(tienda, href):
                 continue
             low = href.lower()
             if any(x in low for x in ("/login", "/carrito", "/cart", "/ayuda", "/contacto", "/buscar", "/search")):
@@ -1764,7 +1783,7 @@ def _descubrir_urls_oficiales_por_busqueda_web(tienda, consulta, max_urls=5):
                 href = a.get("href", "")
                 if href.startswith("//"):
                     href = "https:" + href
-                if dominio not in href:
+                if not _url_es_tienda_oficial(tienda, href):
                     continue
                 href = href.split("#")[0]
                 low = href.lower()
@@ -1820,7 +1839,7 @@ def _consultar_url_oficial_producto(url, tienda, consulta, headers):
 
     try:
         r=requests.get(url,headers=headers,timeout=4.5,allow_redirects=True)
-        if r.status_code==200 and dominio in r.url and r.text.strip():
+        if r.status_code==200 and _url_es_tienda_oficial(tienda, r.url) and r.text.strip():
             out=extraer(r.text,r.url)
             if out:
                 return out
@@ -1854,7 +1873,7 @@ def _extraer_urls_oficiales_desde_texto(texto, tienda, max_urls=8):
     urls=[]; seen=set()
     for href in encontrados:
         href = href.rstrip('.,;:')
-        if dominio not in href:
+        if not _url_es_tienda_oficial(tienda, href):
             continue
         low = href.lower()
         if any(x in low for x in ("/login", "/carrito", "/cart", "/ayuda", "/contacto", "/buscar", "/search")):
@@ -1962,7 +1981,7 @@ def _buscar_candidatos_desde_busqueda_web(tienda, ingrediente_base, headers, max
                 for a in soup.find_all("a",href=True):
                     href=a.get("href","")
                     texto=a.get_text(" ",strip=True)
-                    if dominio not in href: continue
+                    if not _url_es_tienda_oficial(tienda, href): continue
                     if not texto: continue
                     bloque=" ".join([texto, a.parent.get_text(" ",strip=True) if a.parent else ""])
                     norm=normalizar_texto(bloque)
@@ -2031,7 +2050,7 @@ def _buscar_candidatos_tienda(tienda, ingrediente_base):
         url=plantilla.format(q=quote_plus(consulta))
         try:
             r=requests.get(url,headers=headers,timeout=5.0,allow_redirects=True)
-            if r.status_code!=200 or dominio not in r.url:
+            if r.status_code!=200 or not _url_es_tienda_oficial(tienda, r.url):
                 errores.append(f"directo {r.status_code}")
                 continue
             candidatos.extend(_extraer_candidatos_oficiales(r.text,consulta,tienda,r.url))
