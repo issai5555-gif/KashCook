@@ -40,7 +40,7 @@ st.set_page_config(
     layout="wide",
 )
 
-APP_BUILD = "2026.10.09-futurista-v5"
+APP_BUILD = "2026.10.12-menus-caseros-v6"
 
 TIENDAS_DISPONIBLES = [
     "Alsuper",
@@ -1149,8 +1149,14 @@ BUSQUEDAS_TIENDA = {
         "https://www.walmart.com.mx/search?query={q}",
     ],
     "Bodega Aurrerá": [
+        # Bodega opera distintas experiencias web (catálogo principal, kiosco
+        # y despensa/entrega rápida). Se prueban solo dominios oficiales.
         "https://www.bodegaaurrera.com.mx/search?q={q}",
         "https://www.bodegaaurrera.com.mx/search?query={q}",
+        "https://kiosco.www.bodegaaurrera.com.mx/search?q={q}",
+        "https://kiosco.www.bodegaaurrera.com.mx/search?query={q}",
+        "https://despensa.bodegaaurrera.com.mx/search?q={q}",
+        "https://despensa.bodegaaurrera.com.mx/search?query={q}",
     ],
     "Soriana": [
         "https://www.soriana.com/buscar?q={q}",
@@ -1160,6 +1166,8 @@ BUSQUEDAS_TIENDA = {
         "https://alsuper.com/buscar?query={q}",
         "https://alsuper.com/search?search={q}",
         "https://alsuper.com/busqueda?query={q}",
+        "https://alsuper.com/search?q={q}",
+        "https://www.alsuper.com/search?q={q}",
     ],
 }
 
@@ -1176,6 +1184,7 @@ CONSULTAS_PRECIO = {
     "res": "carne de res",
     "molida": "carne molida de res",
     "puerco": "carne de cerdo",
+    "cerdo": "carne de cerdo",
     "pescado": "filete de pescado",
     "atun": "atun en agua",
     "camaron": "camaron limpio",
@@ -2137,6 +2146,7 @@ def _candidato_compatible_base(candidato, producto_referencia):
         "atun": ("atun", "atún", "tuny"),
         "camaron": ("camaron", "camarón"),
         "puerco": ("cerdo", "puerco", "chuleta", "pierna de cerdo"),
+        "cerdo": ("cerdo", "puerco", "chuleta", "pierna de cerdo"),
         "pescado": ("pescado", "filete", "tilapia", "mojarra", "salmon", "salmón"),
         "arroz": ("arroz",), "frijol": ("frijol",), "tortilla": ("tortilla",),
         "huevo": ("huevo",), "queso": ("queso",), "aceite": ("aceite",),
@@ -3966,6 +3976,11 @@ def _producto_para_base(base, catalogo):
     verificados.
     """
     candidatos=[p for p in catalogo if p.get("ingrediente_base")==base]
+    # La biblioteca histórica usa "puerco" en algunas recetas, mientras que
+    # los catálogos comerciales normalizan ese mismo ingrediente como "cerdo".
+    # Se unifican aquí para que no desaparezca la proteína de la receta/compra.
+    if base in {"puerco", "cerdo"}:
+        candidatos=[p for p in catalogo if p.get("ingrediente_base") in {"cerdo", "puerco"}]
     if base == "molida":
         candidatos=[p for p in catalogo if p.get("ingrediente_base")=="res" and "molida" in str(p.get("nombre","")).lower()]
     if not candidatos:
@@ -4149,6 +4164,7 @@ def _generar_plan_local(
     estilos=None,
     electrodomesticos=None,
     restricciones="",
+    modo_basico=True,
 ):
     """Motor local de KashCook: recetas reales + variedad + compras agrupadas.
 
@@ -4160,6 +4176,11 @@ def _generar_plan_local(
 
     estilos = estilos or []
     electrodomesticos = electrodomesticos or ["Estufa"]
+    # El modo básico está pensado para el estilo cotidiano mexicano/casero.
+    # Si el usuario elige explícitamente cocinas internacionales, respetamos
+    # el generador avanzado y sus filtros.
+    estilos_basicos = {"Mexicana", "Casera", "Económica", "Desayunos mexicanos"}
+    modo_basico_activo = bool(modo_basico) and set(estilos).issubset(estilos_basicos)
 
     # Esta biblioteca actual está diseñada para cocina de estufa. Si el usuario
     # dispone de estufa, todos los platos base son posibles. Para otros equipos
@@ -4180,7 +4201,7 @@ def _generar_plan_local(
             return False
         if tipo == "Comida" and rid in COMIDAS_NO_VALIDAS_COMO_PLATO_PRINCIPAL:
             return False
-        if not _receta_coincide_estilos(rid, estilos):
+        if not modo_basico_activo and not _receta_coincide_estilos(rid, estilos):
             return False
         if not _receta_compatible(rid, electrodomesticos, restricciones):
             return False
@@ -4224,6 +4245,72 @@ def _generar_plan_local(
     pools = {"Desayuno": candidatos_des, "Comida": candidatos_pl, "Cena": candidatos_cena}
     if not candidatos_cena and "Cena" in comidas:
         raise ValueError("No hay cenas sencillas reales compatibles con los estilos y restricciones seleccionados.")
+
+    # ------------------------------------------------------------
+    # MENÚ BÁSICO Y CASERO (predeterminado para cocina mexicana)
+    # ------------------------------------------------------------
+    # Recetas cotidianas con ingredientes reconocibles y preparaciones
+    # familiares. No se generan combinaciones experimentales ni se mezclan
+    # platos de cena con comida. Las restricciones y los utensilios siguen
+    # aplicándose antes de aceptar cada receta.
+    if modo_basico_activo:
+        listas_basicas = {
+            "Desayuno": [
+                "huevos_mexicana", "papas_huevo", "huevos_rancheros",
+                "enfrijoladas_queso", "quesadillas_calabacita", "tortitas_papa",
+                "chilaquiles_rojos",
+            ],
+            "Comida": [
+                "pollo_salsa_roja", "picadillo", "pollo_mexicana",
+                "bistec_ranchero", "cerdo_salsa_tomate", "carne_papas",
+                "pescado_mexicana",
+            ],
+            "Cena": [
+                "caldo_pollo_cena", "quesadillas_pollo", "ensalada_atun_papa",
+                "calabacitas_queso", "sopa_tortilla_cena", "pollo_entomatado",
+                "tacos_papa_queso", "atun_arroz", "pescado_tomate",
+            ],
+        }
+        pools_basicos = {}
+        for tipo in comidas:
+            elegibles = [rid for rid in listas_basicas.get(tipo, [])
+                         if rid in RECETAS_REALES and compatible(rid, tipo)]
+            # En cenas puede haber recetas de biblioteca clasificadas con una
+            # etiqueta distinta. Solo se aceptan las que realmente tienen el
+            # tipo pedido; nunca se cambia el tipo para hacerlas caber.
+            pools_basicos[tipo] = elegibles
+            if not elegibles:
+                # Si una restricción elimina todas las recetas de un tipo,
+                # avisamos en lugar de inventar una sustitución.
+                raise ValueError(
+                    f"No hay recetas básicas de {tipo.lower()} compatibles con tus restricciones. "
+                    "Quita o ajusta la restricción para generar el menú."
+                )
+        # Crear una secuencia fácil de entender: rotación de platos conocidos,
+        # sin repetir el mismo plato en días consecutivos si hay alternativas.
+        import random as _random_basico
+        seed_basico = int(st.session_state.get("kc_semilla_menu", 0) or 20261012)
+        rng_basico = _random_basico.Random(seed_basico + int(dias) * 19 + int(personas) * 7)
+        secuencias = {}
+        for tipo, opciones in pools_basicos.items():
+            opciones = list(opciones)
+            rng_basico.shuffle(opciones)
+            secuencias[tipo] = opciones
+        slots_basicos = []
+        for d in range(int(dias)):
+            fila = []
+            for tipo in comidas:
+                opciones = secuencias[tipo]
+                idx = d % len(opciones)
+                rid = opciones[idx]
+                if d > 0 and len(opciones) > 1 and rid == slots_basicos[d-1][len(fila)]:
+                    rid = opciones[(idx + 1) % len(opciones)]
+                fila.append(rid)
+            slots_basicos.append(fila)
+        plan_basico = _plan_con_recetas(slots_basicos, catalogo, comidas)
+        if not plan_basico:
+            raise ValueError("No fue posible armar el menú básico con los productos disponibles en las tiendas seleccionadas.")
+        return plan_basico, round(_costo_plan(plan_basico, catalogo, personas), 2)
 
     iso = date.today().isocalendar()
     semana_seed = (int(iso.year) * 100 + int(iso.week)) * 1000003
@@ -4630,7 +4717,7 @@ a { color:var(--cyan) !important; }
 st.markdown(f"<div class='hero'><div><div class='badge'>KASHCOOK AI · MENÚ + COMPRAS + PRESUPUESTO · {APP_BUILD}</div><h1>Come mejor.<br>Compra inteligente.</h1><p>Un plan de comida a tu medida, con cantidades consolidadas, lista de compra por tienda y precios actuales solo cuando pueden verificarse.</p></div></div>", unsafe_allow_html=True)
 
 st.markdown("<div class='section-title'>1 · Diseña tu semana</div>", unsafe_allow_html=True)
-st.caption(f"Motor {APP_BUILD} · Precio verificado solo con fuente oficial detectable. Si la tienda bloquea la consulta, se informa y no se inventa un precio.")
+st.caption(f"Motor {APP_BUILD} · Menús básicos caseros por defecto. Los precios solo se consideran reales cuando se confirma producto, presentación, precio y fuente oficial; si la tienda bloquea la consulta, quedan pendientes.")
 
 # Tiendas: mismos datos y mismas 4 tiendas, ahora con los logos visuales restaurados.
 STORE_META_UI = {
@@ -4667,7 +4754,8 @@ col1,col2=st.columns(2)
 with col1:
     st.markdown("<div class='section-title' style='font-size:1.25rem'>🍽️ Estilo de comida</div>", unsafe_allow_html=True)
     estilos=st.multiselect("Selecciona uno o varios estilos",["Mexicana","Casera","Asiática","Italiana","Mediterránea","Saludable","Económica","Alta en proteína","Baja en carbohidratos","Desayunos mexicanos","Comida rápida casera"],default=["Mexicana","Casera","Económica"],label_visibility="collapsed")
-    st.markdown("<div class='small-note'>KashCook combina las cocinas seleccionadas y busca variedad de platos, proteínas y preparaciones; no se limita a cambiar ingredientes de una misma receta.</div>", unsafe_allow_html=True)
+    modo_menu_basico = st.checkbox("Priorizar menús básicos y caseros (recomendado)", value=True, help="Usa recetas cotidianas mexicanas: huevos, papas, pollo guisado, picadillo, bistec, caldos, quesadillas y cenas sencillas. Si eliges estilos internacionales, se usará el generador avanzado.")
+    st.markdown("<div class='small-note'>Con el modo básico activado, KashCook prioriza platillos cotidianos y reconocibles. Las recetas respetan las restricciones indicadas y no cambian de desayuno, comida o cena.</div>", unsafe_allow_html=True)
 with col2:
     st.markdown("<div class='section-title' style='font-size:1.25rem'>🍳 ¿Qué comidas quieres planear?</div>", unsafe_allow_html=True)
     comidas=st.multiselect("Selecciona las comidas",["Desayuno","Comida","Cena"],default=["Desayuno","Comida","Cena"],label_visibility="collapsed")
@@ -4713,13 +4801,15 @@ if generar_menu:
                 plan,_=_generar_plan_local(
                     dias=int(dias),personas=int(personas),presupuesto=presupuesto_planificacion,
                     comidas=comidas,catalogo=catalogo,estilos=estilos,
-                    electrodomesticos=electrodomesticos,restricciones=restricciones)
+                    electrodomesticos=electrodomesticos,restricciones=restricciones,
+                    modo_basico=modo_menu_basico)
             except ValueError:
                 presupuesto_planificacion=max(float(presupuesto)*1.60, float(presupuesto)+450.0)
                 plan,_=_generar_plan_local(
                     dias=int(dias),personas=int(personas),presupuesto=presupuesto_planificacion,
                     comidas=comidas,catalogo=catalogo,estilos=estilos,
-                    electrodomesticos=electrodomesticos,restricciones=restricciones)
+                    electrodomesticos=electrodomesticos,restricciones=restricciones,
+                    modo_basico=modo_menu_basico)
 
             bases_necesarias=sorted({base for dia in plan.get("dias",[]) for comida in dia.get("comidas",[])
                                      for ing in comida.get("ingredientes",[])
