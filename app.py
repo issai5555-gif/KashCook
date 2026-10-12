@@ -40,7 +40,7 @@ st.set_page_config(
     layout="wide",
 )
 
-APP_BUILD = "2026.10.12-menus-caseros-precios-v7"
+APP_BUILD = "2026.10.12-alsuper-ssl-v8"
 
 TIENDAS_DISPONIBLES = [
     "Alsuper",
@@ -1163,18 +1163,19 @@ BUSQUEDAS_TIENDA = {
         "https://www.soriana.com/buscar?q={q}&search-button=",
     ],
     "Alsuper": [
-        # La tienda pública actual publica fichas en alsuper.mx/producto/.
-        # Se prueban rutas de búsqueda en el dominio actual y el legado.
+        # Se prioriza alsuper.com.mx: el catálogo oficial publica fichas de
+        # producto bajo este host. No se desactiva la validación SSL.
+        "https://www.alsuper.com.mx/buscar?query={q}",
+        "https://www.alsuper.com.mx/search?query={q}",
+        "https://www.alsuper.com.mx/busqueda?query={q}",
+        "https://www.alsuper.com.mx/search?q={q}",
+        "https://alsuper.com.mx/buscar?query={q}",
+        # Hosts alternativos solo como último recurso; todos conservan SSL.
         "https://www.alsuper.mx/buscar?query={q}",
-        "https://www.alsuper.mx/search?query={q}",
-        "https://www.alsuper.mx/busqueda?query={q}",
         "https://www.alsuper.mx/search?q={q}",
         "https://alsuper.mx/buscar?query={q}",
         "https://alsuper.com/buscar?query={q}",
-        "https://alsuper.com/search?search={q}",
-        "https://alsuper.com/busqueda?query={q}",
         "https://alsuper.com/search?q={q}",
-        "https://www.alsuper.com/search?q={q}",
     ],
 }
 
@@ -1183,13 +1184,13 @@ DOMINIOS_OFICIALES = {
     "Walmart": "walmart.com.mx",
     "Bodega Aurrerá": "bodegaaurrera.com.mx",
     "Soriana": "soriana.com",
-    "Alsuper": "alsuper.mx",
+    "Alsuper": "alsuper.com.mx",
 }
 
 DOMINIOS_ALTERNATIVOS = {
-    # Alsuper migró sus fichas públicas al dominio .mx; el dominio .com
-    # se conserva como alias legado para enlaces que todavía redirigen.
-    "Alsuper": ("alsuper.mx", "alsuper.com"),
+    # Los catálogos públicos oficiales de Alsuper están publicados en .com.mx
+    # y también existen enlaces vigentes bajo .mx y .com.
+    "Alsuper": ("alsuper.com.mx", "alsuper.mx", "alsuper.com"),
 }
 
 def _url_es_tienda_oficial(tienda, url):
@@ -4772,7 +4773,7 @@ st.caption(f"Motor {APP_BUILD} · Menús básicos caseros por defecto. Los preci
 
 # Tiendas: mismos datos y mismas 4 tiendas, ahora con los logos visuales restaurados.
 STORE_META_UI = {
-    "Alsuper": {"emoji":"🟡", "domain":"alsuper.com"},
+    "Alsuper": {"emoji":"🟡", "domain":"alsuper.com.mx"},
     "Smart": {"emoji":"🟣", "domain":"supermercadossmart.com"},
     "Walmart": {"emoji":"🔵", "domain":"walmart.com.mx"},
     "Soriana": {"emoji":"🔴", "domain":"soriana.com"},
