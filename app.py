@@ -1163,19 +1163,14 @@ BUSQUEDAS_TIENDA = {
         "https://www.soriana.com/buscar?q={q}&search-button=",
     ],
     "Alsuper": [
-        # Se prioriza alsuper.com.mx: el catálogo oficial publica fichas de
-        # producto bajo este host. No se desactiva la validación SSL.
+        # Usar únicamente el dominio oficial configurado para evitar errores
+        # de certificado/hostname de alias como alsuper.mx o alsuper.com.
+        # Nunca se desactiva la verificación TLS.
         "https://www.alsuper.com.mx/buscar?query={q}",
         "https://www.alsuper.com.mx/search?query={q}",
         "https://www.alsuper.com.mx/busqueda?query={q}",
         "https://www.alsuper.com.mx/search?q={q}",
         "https://alsuper.com.mx/buscar?query={q}",
-        # Hosts alternativos solo como último recurso; todos conservan SSL.
-        "https://www.alsuper.mx/buscar?query={q}",
-        "https://www.alsuper.mx/search?q={q}",
-        "https://alsuper.mx/buscar?query={q}",
-        "https://alsuper.com/buscar?query={q}",
-        "https://alsuper.com/search?q={q}",
     ],
 }
 
@@ -1188,9 +1183,9 @@ DOMINIOS_OFICIALES = {
 }
 
 DOMINIOS_ALTERNATIVOS = {
-    # Los catálogos públicos oficiales de Alsuper están publicados en .com.mx
-    # y también existen enlaces vigentes bajo .mx y .com.
-    "Alsuper": ("alsuper.com.mx", "alsuper.mx", "alsuper.com"),
+    # Se acepta solo el dominio configurado como oficial para Alsuper.
+    # No se confía en alias que han devuelto errores de hostname SSL.
+    "Alsuper": ("alsuper.com.mx",),
 }
 
 def _url_es_tienda_oficial(tienda, url):
