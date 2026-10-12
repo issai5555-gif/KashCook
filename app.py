@@ -1163,14 +1163,16 @@ BUSQUEDAS_TIENDA = {
         "https://www.soriana.com/buscar?q={q}&search-button=",
     ],
     "Alsuper": [
-        # Usar únicamente el dominio oficial configurado para evitar errores
-        # de certificado/hostname de alias como alsuper.mx o alsuper.com.
-        # Nunca se desactiva la verificación TLS.
-        "https://www.alsuper.com.mx/buscar?query={q}",
-        "https://www.alsuper.com.mx/search?query={q}",
-        "https://www.alsuper.com.mx/busqueda?query={q}",
-        "https://www.alsuper.com.mx/search?q={q}",
-        "https://alsuper.com.mx/buscar?query={q}",
+        # Dominio canónico que publica la propia cadena: https://alsuper.com/
+        # No se desactiva la validación TLS ni se consultan dominios con
+        # certificados/hostnames incompatibles.
+        "https://alsuper.com/buscar?query={q}",
+        "https://alsuper.com/search?query={q}",
+        "https://alsuper.com/busqueda?query={q}",
+        "https://alsuper.com/search?q={q}",
+        "https://www.alsuper.com/buscar?query={q}",
+        "https://www.alsuper.com/search?q={q}",
+        "https://alsuper.com/",
     ],
 }
 
@@ -1179,20 +1181,23 @@ DOMINIOS_OFICIALES = {
     "Walmart": "walmart.com.mx",
     "Bodega Aurrerá": "bodegaaurrera.com.mx",
     "Soriana": "soriana.com",
-    "Alsuper": "alsuper.com.mx",
+    "Alsuper": "alsuper.com",
 }
 
 DOMINIOS_ALTERNATIVOS = {
-    # Se acepta solo el dominio configurado como oficial para Alsuper.
-    # No se confía en alias que han devuelto errores de hostname SSL.
-    "Alsuper": ("alsuper.com.mx",),
+    # Host canónico oficial de Alsuper. www.alsuper.com se acepta como subdominio.
+    "Alsuper": ("alsuper.com",),
 }
 
 def _url_es_tienda_oficial(tienda, url):
-    """Comprueba el host oficial actual y alias documentados de la tienda."""
-    host = str(url or "").lower()
+    """Valida el hostname completo para evitar falsos positivos por substring."""
+    from urllib.parse import urlparse
+    try:
+        host = (urlparse(str(url or "")).hostname or "").lower().rstrip(".")
+    except Exception:
+        return False
     dominios = DOMINIOS_ALTERNATIVOS.get(tienda, (DOMINIOS_OFICIALES.get(tienda, ""),))
-    return any(d and d in host for d in dominios)
+    return any(d and (host == d or host.endswith("." + d)) for d in dominios)
 
 CONSULTAS_PRECIO = {
     "pollo": "pechuga de pollo",
@@ -4768,7 +4773,7 @@ st.caption(f"Motor {APP_BUILD} · Menús básicos caseros por defecto. Los preci
 
 # Tiendas: mismos datos y mismas 4 tiendas, ahora con los logos visuales restaurados.
 STORE_META_UI = {
-    "Alsuper": {"emoji":"🟡", "domain":"alsuper.com.mx"},
+    "Alsuper": {"emoji":"🟡", "domain":"alsuper.com"},
     "Smart": {"emoji":"🟣", "domain":"supermercadossmart.com"},
     "Walmart": {"emoji":"🔵", "domain":"walmart.com.mx"},
     "Soriana": {"emoji":"🔴", "domain":"soriana.com"},
